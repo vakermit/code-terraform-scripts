@@ -3,34 +3,41 @@
 #  Steps 2 and 3 of the biology loop: specimen -> analyzed -> sample.
 # =============================================================================
 #
-#  This is script 2 of 3, and the one that does the real thinking.
+#  This is script 2 of 3, and it is the one that learns.
 #
-#  A specimen is worthless until it becomes a sample, and a sample costs
-#  reagents. Reagents cost credits and occupy inventory slots. So every
-#  extraction here is planned before it is run:
+#  THE COST MODEL. Nothing in the API will tell you what a Bio Order costs
+#  to fill. Prices are public — shop.get_catalogue() gives every reagent's
+#  cost — but the recipe that turns a fragment into a sample is revealed
+#  ONLY by analyze(), and only while that specimen sits in this chamber.
+#  scan() hides recipes, journal.cataloged_fragments() has no recipe field,
+#  and item_catalog.lookup() has no recipe field.
 #
-#      analyze()  ->  recipe {reagent_id: qty}
-#      recipe + inventory + credits  ->  BUILD A PROCEDURE (ordered steps)
-#      run the procedure  ->  buy / load / extract
+#  So the price list has to be built, one analysis at a time:
 #
-#  build_procedure() is the point of the split. It reads inventory and turns
-#  "this specimen needs 3 cryo_solvent" into "buy 6 (3 for the bench, 3 for
-#  the buffer), then load 3". Nothing is bought or loaded until the whole
-#  plan is known, so a plan that cannot be afforded is abandoned before a
-#  single credit is spent, and the plan is printed before it runs.
+#      analyze()  ->  info.required_recipe  ->  recipes[fragment_id]
+#      recipes[frag] x shop prices          ->  cost per sample
+#      cost per sample x order remaining    ->  cost to finish the order
 #
-#  Two hazards drive the guards below:
-#    * extract() with a mismatched bench DESTROYS the loaded reagents.
-#      loaded_matches() refuses to extract unless the bench is exact.
-#    * extract() into a full inventory stalls the whole pipeline.
-#      make_room() sells surplus reagents — never samples, which sell for 0
-#      on purpose; samples are worth credits only through the Bio Exchange.
+#  analyze() costs no reagents — only ~0.1 h — so learning a recipe is
+#  nearly free. That is why the Collector's opening run samples unknown
+#  dots: it is buying the price list, cheaply, before anything is spent.
+#
+#  The learned book lives in this script's variables, so it resets when the
+#  script restarts. The journal keeps the fragments; it does not keep their
+#  recipes. Re-analysing a known fragment reprices it in one cheap trip.
+#
+#  PORTS. The manual Biology buttons and the scripted ports are separate
+#  paths. A script must take reagents into self.input, load() them into the
+#  chamber, then send() the finished sample out of self.output. self.input
+#  holds ONE reagent type at a time, so each reagent is taken and loaded in
+#  turn rather than all staged at once.
 # =============================================================================
 
-REAGENT_BUFFER = 5     # units of each recipe reagent to keep beyond the bench need
-CREDIT_FLOOR = 200     # never spend the last credits on optional buffer stock
-IDLE_SLEEP = 0.5       # waiting on the collector / an action in flight
-DEMAND_SLEEP = 5       # a required machine is missing — long wait
+STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
+REAGENT_BUFFER = 5     # spare units to keep beyond the recipe's need
+CREDIT_FLOOR = 200     # never spend below this on optional buffer stock
+IDLE_SLEEP = 0.5
+DEMAND_SLEEP = 5
 
 # Leave as "" to auto-detect, or paste the exact ids from the machine cards.
 COLLECTOR_ID = ""
@@ -39,9 +46,7 @@ EXCHANGE_ID = ""
 
 def find_machine(kind, configured):
     # Instance ids are numbered per save — bio_collector_1, bio_collector_2,
-    # ... — so the id that works in one save may not exist in another.
-    # get_component() returns None for an unknown id rather than raising,
-    # so probing is safe: configured id, then bare type, then suffixes.
+    # ... — and a powered-down machine reads the same as a missing one.
     if configured != "":
         found = get_component(configured)
         if found != None:
@@ -65,183 +70,224 @@ exchange = find_machine("bio_exchange", EXCHANGE_ID)
 inventory = get_component("inventory")
 shop = get_component("shop")
 commander = get_component("commander")
+research = get_component("research")
 
-# A Bio Collector is not optional — it is the only source of specimens.
 if collector == None:
-    print("[lab] no Bio Collector found — set COLLECTOR_ID to the id on its machine card")
+    print("[lab] no Bio Collector found — is it powered on?")
 
-# A Bio Exchange is optional. Without one there is no order list, so there is
-# no way to know which species are worth reagents. Fall back to catalog mode:
-# analyze every specimen (analysis is what writes the catalog and the journal
-# coords) and then discard it, so the run costs no reagents and no credits.
-CATALOG_MODE = exchange == None
-if CATALOG_MODE:
-    print("[lab] no Bio Exchange found — catalog mode: analyze and discard, no extraction")
-    print("[lab] set EXCHANGE_ID to the id on its machine card to extract toward orders")
-
-# Every reagent id this lab has seen in a recipe. Seeded with the starter
-# set, then grown from real recipes — so make_room() only ever sells things
-# it knows to be reagents. A list, not a set, because the interpreter's for
-# loop iterates lists, tuples and ranges.
-known_reagents = [
-    "alkaline_buffer", "cryo_solvent", "protein_marker",
-    "chelating_agent", "enzyme_solution"
-]
+# Scripted port transfers are gated behind research. Without it take() and
+# send() fail and the Lab can only be driven by the manual workbench.
+if not research.is_unlocked("research_auto_feeders"):
+    print("[lab] Auto Feeders is not researched — self.input.take() and")
+    print("[lab] self.output.send() will not move anything yet.")
 
 
-def remember_reagent(reagent):
-    if reagent not in known_reagents:
-        known_reagents.append(reagent)
+# ------------------------------------------------------------ price list ----
+
+# Reagent prices are static, so read the catalogue once.
+prices = {}
+for entry in shop.get_catalogue():
+    prices[entry.id] = entry.cost
+
+# fragment_id -> {reagent_id: qty}, learned from analyze().
+recipes = {}
+
+
+def recipe_cost(recipe):
+    # Credits of reagents consumed by one extraction of this recipe.
+    total = 0
+    for reagent in recipe.keys():
+        total = total + recipe[reagent] * prices.get(reagent, 0)
+    return total
+
+
+def order_estimate(order):
+    # What finishing `order` would cost in reagents, from what we know.
+    #
+    # Returns {"cost": n, "known": n, "unknown": n} where cost covers only
+    # the fragments whose recipe has been learned. `unknown` counts the
+    # samples we cannot price yet — the estimate is a floor while it is > 0.
+    cost = 0
+    known = 0
+    unknown = 0
+
+    for frag in order.requires.keys():
+        short = order.requires[frag]
+        short = short - order.delivered.get(frag, 0)
+        short = short - order.in_transit.get(frag, 0)
+        if short <= 0:
+            continue
+
+        if recipes.has(frag):
+            cost = cost + short * recipe_cost(recipes[frag])
+            known = known + short
+        else:
+            unknown = unknown + short
+
+    estimate = {}
+    estimate["cost"] = cost
+    estimate["known"] = known
+    estimate["unknown"] = unknown
+    return estimate
+
+
+def report_order_economics():
+    # One-line read on whether the active order is worth finishing.
+    if exchange == None:
+        return
+
+    order = exchange.active_order()
+    if order == None:
+        return
+
+    estimate = order_estimate(order)
+    cost = estimate["cost"]
+    unknown = estimate["unknown"]
+    margin = order.reward - cost
+
+    if unknown > 0:
+        print("[lab]", order.name, "- at least", cost, "cr of reagents,")
+        print("[lab]  ", unknown, "samples still unpriced — margin under", margin)
+    else:
+        print("[lab]", order.name, "- costs", cost, "cr, pays", order.reward,
+              "cr, margin", margin)
 
 
 # ---------------------------------------------------------------- demand ----
 
-def outstanding_demand():
-    # Same calculation the Collector and Exchange run: what unfinished
-    # orders still need, minus samples already sitting in inventory.
-    if CATALOG_MODE:
+def active_remaining():
+    # What the ACTIVE order still needs, net of committed samples.
+    if exchange == None:
         return {}
 
-    demand = {}
-    for order in exchange.orders():
-        if order.status == "complete":
+    order = exchange.active_order()
+    if order == None:
+        return {}
+
+    remaining = {}
+    for frag in order.requires.keys():
+        short = order.requires[frag]
+        short = short - order.delivered.get(frag, 0)
+        short = short - order.in_transit.get(frag, 0)
+        if short > 0:
+            remaining[frag] = short
+    return remaining
+
+
+# ----------------------------------------------------------------- ports ----
+
+def ensure_ports():
+    # Both ports must point at the store before anything can move.
+    if self.input.connected_id() != STORE:
+        result = self.input.connect(STORE)
+        if result.status != "ok":
+            print("[lab] input connect failed:", result.message)
+            return False
+
+    if self.output.connected_id() != STORE:
+        result = self.output.connect(STORE)
+        if result.status != "ok":
+            print("[lab] output connect failed:", result.message)
+            return False
+
+    return True
+
+
+def drain_output():
+    # Push finished samples and recovered reagents back to the store.
+    # extract() stages into output and does NOT forward automatically, so a
+    # full output port stalls the next extraction.
+    for stack in self.output.stacks():
+        result = self.output.send(stack.id, stack.count, stack.properties, "exact")
+        if result.status != "ok":
+            print("[lab] could not drain", stack.id, "-", result.message)
+            return False
+    return True
+
+
+def clear_input_except(reagent):
+    # self.input latches to one reagent id. A leftover of a different type
+    # blocks the next take(), so return it to the store first.
+    for stack in self.input.stacks():
+        if stack.id == reagent:
             continue
-        for frag in order.requires.keys():
-            missing = order.requires[frag] - order.delivered.get(frag, 0)
-            if missing > 0:
-                demand[frag] = demand.get(frag, 0) + missing
-
-    short = {}
-    for frag in demand.keys():
-        gap = demand[frag] - inventory.get_count(frag)
-        if gap > 0:
-            short[frag] = gap
-    return short
+        result = self.input.eject(STORE, stack.id, stack.count)
+        if result.status != "ok":
+            print("[lab] input blocked by", stack.id, "-", result.message)
+            return False
+    return True
 
 
-def any_open_orders():
-    # In catalog mode there is no order list to consult, but there is still
-    # cataloging work to do, so the loop keeps running.
-    if CATALOG_MODE:
+# ------------------------------------------------------------- reagents ----
+
+def stock_reagent(reagent, units):
+    # Make sure the store holds `units` of `reagent`, buying the shortfall
+    # plus a buffer. Returns True when the required amount is covered.
+    held = inventory.count(reagent)
+    if held >= units:
         return True
 
-    for order in exchange.orders():
-        if order.status != "complete":
-            return True
-    return False
+    shortfall = units - held
+    wanted = shortfall + REAGENT_BUFFER
+
+    # The buffer is optional; the shortfall is not.
+    if commander.get_credits() < CREDIT_FLOOR:
+        wanted = shortfall
+
+    price = prices.get(reagent, 0)
+    if price * wanted > commander.get_credits():
+        affordable = 0
+        if price > 0:
+            affordable = floor(commander.get_credits() / price)
+        if affordable < shortfall:
+            print("[lab] cannot afford", shortfall, "x", reagent,
+                  "- need", price * shortfall, "cr")
+            return False
+        wanted = affordable
+
+    result = shop.buy(reagent, wanted)
+    if result.status != "ok":
+        print("[lab] buy", reagent, "failed:", result.message)
+        return inventory.count(reagent) >= units
+
+    return inventory.count(reagent) >= units
 
 
-# ------------------------------------------------------------- inventory ----
-
-def make_room():
-    # Guarantee at least one free slot. Sells reagent surplus above the
-    # buffer. Returns True if a slot is free.
-    if inventory.get_used() < inventory.get_size():
-        return True
-
-    for reagent in known_reagents:
-        while inventory.get_used() >= inventory.get_size():
-            if inventory.get_count(reagent) <= REAGENT_BUFFER:
-                break
-            earned = shop.sell(reagent)
-            if earned <= 0:
-                break
-            print("[lab] sold 1 surplus", reagent, "for", earned, "cr to free a slot")
-        if inventory.get_used() < inventory.get_size():
-            return True
-
-    return inventory.get_used() < inventory.get_size()
-
-
-# -------------------------------------------------------------- procedure ---
-
-def build_procedure(recipe):
-    # Turn an analyzed recipe into an ordered list of steps, given what
-    # inventory holds right now.
+def stage_recipe(recipe):
+    # Take and load each reagent in turn. self.input holds one type at a
+    # time, so this is take -> load -> take -> load, not a bulk staging.
     #
-    # Each step is a dict:
-    #     {"op": "buy",  "reagent": id, "qty": n, "required": n}
-    #     {"op": "load", "reagent": id, "qty": n}
-    #     {"op": "extract"}
-    #
-    # `qty` on a buy includes the buffer; `required` is the part that is not
-    # optional. If a buy cannot reach `required`, the procedure is abandoned.
-    steps = []
+    # Subtract what is already in loaded_reagents on every pass: taking the
+    # full recipe again would leave a surplus latched in the input port and
+    # block the next reagent type.
     for reagent in recipe.keys():
-        remember_reagent(reagent)
-
-        need = recipe[reagent]
-        on_bench = self.loaded_reagents.get(reagent, 0)
-        to_load = need - on_bench
-        if to_load <= 0:
+        need = recipe[reagent] - self.loaded_reagents.get(reagent, 0)
+        if need <= 0:
             continue
 
-        in_stock = inventory.get_count(reagent)
-        wanted = to_load + REAGENT_BUFFER
-        if in_stock < wanted:
-            step = {}
-            step["op"] = "buy"
-            step["reagent"] = reagent
-            step["qty"] = wanted - in_stock
-            step["required"] = to_load - in_stock   # <= 0 means pure buffer
-            steps.append(step)
+        if not stock_reagent(reagent, need):
+            return False
+        if not clear_input_except(reagent):
+            return False
 
-        step = {}
-        step["op"] = "load"
-        step["reagent"] = reagent
-        step["qty"] = to_load
-        steps.append(step)
+        staged = self.input.count()
+        if staged < need:
+            result = self.input.take(reagent, need - staged)
+            if result.status != "ok":
+                print("[lab] take", reagent, "failed:", result.message)
+                return False
 
-    steps.append({"op": "extract"})
-    return steps
+        result = self.load(reagent, need)
+        if result.status != "ok":
+            print("[lab] load", reagent, "failed:", result.message)
+            return False
 
-
-def describe(steps):
-    # One-line rendering of a procedure, printed before it runs.
-    parts = []
-    for step in steps:
-        op = step["op"]
-        if op == "extract":
-            parts.append("extract")
-        else:
-            qty = step["qty"]
-            reagent = step["reagent"]
-            parts.append(f"{op} {qty}x {reagent}")
-    return " -> ".join(parts)
+    return True
 
 
-def run_buy(step):
-    # Buy up to step["qty"]. Succeeds as long as the non-optional part is
-    # covered — the buffer is a nice-to-have, the bench need is not.
-    reagent = step["reagent"]
-    target = step["qty"]
-    required = step["required"]
-
-    bought = 0
-    while bought < target:
-        # Buffer purchases stop at the credit floor; required ones do not.
-        if bought >= required and commander.get_credits() < CREDIT_FLOOR:
-            break
-        if not make_room():
-            break
-
-        result = shop.buy(reagent)
-        if result == "ok":
-            bought = bought + 1
-            continue
-
-        # not_enough / inventory_full / not_found / locked
-        print("[lab] cannot buy", reagent, "-", result)
-        break
-
-    if bought > 0:
-        print("[lab] bought", bought, "x", reagent)
-    return bought >= required
-
-
-def loaded_matches(recipe):
-    # The bench must equal the recipe exactly — no missing units, no extras.
-    # extract() destroys the loaded reagents otherwise.
+def bench_matches(recipe):
+    # The chamber must equal the recipe exactly — no missing units, no
+    # extras. extract() destroys the loaded reagents otherwise.
     bench = self.loaded_reagents
     for reagent in recipe.keys():
         if bench.get(reagent, 0) != recipe[reagent]:
@@ -252,105 +298,95 @@ def loaded_matches(recipe):
     return True
 
 
-def run_procedure(steps, recipe):
-    # Execute a built procedure. Returns a status string.
-    for step in steps:
-        op = step["op"]
-
-        if op == "buy":
-            if not run_buy(step):
-                return "short_reagents"
-
-        elif op == "load":
-            result = self.load(step["reagent"], step["qty"])
-            if result != True:
-                print("[lab] load", step["reagent"], "failed:", result)
-                return "short_reagents"
-
-        elif op == "extract":
-            if not loaded_matches(recipe):
-                # Stale or wrong bench. discard() is the only way to clear
-                # loaded reagents without destroying them — it refunds them.
-                print("[lab] bench does not match recipe — refunding and resetting")
-                self.discard()
-                return "bench_reset"
-            if not make_room():
-                return "inventory_full"
-            return self.extract()
-
-    return "incomplete"
-
-
 # ------------------------------------------------------------------ loop ----
 
+reported_for = ""
+
 while True:
-    if not any_open_orders():
-        print("[lab] every bio order is complete — stopping")
-        break
+    if not ensure_ports():
+        sleep(DEMAND_SLEEP)
+        continue
 
-    spec = self.input
+    # Output first: a full output port stalls extract(), discard() and
+    # unload_reagents(), all of which stage their results there.
+    drain_output()
 
-    # --- no specimen: pull one out of the collector's cargo -----------------
-    if not spec:
+    specimen = self.specimen
+
+    # --- empty chamber: pull a specimen from the collector's cargo ----------
+    if not specimen:
         if collector == None:
             sleep(DEMAND_SLEEP)
             continue
         result = self.take_from(collector)
-        if result != True:
+        if result.status != "ok":
             # source_empty is the normal case — the collector is still out.
             sleep(IDLE_SLEEP)
         continue
 
-    # --- specimen present but unidentified: analyze it ----------------------
-    if spec.stage == "collected":
+    # --- unidentified: analyze, and learn the recipe ------------------------
+    if specimen.stage == "collected":
         result = self.analyze()
-        # Read state back rather than inspecting the return type: analyze()
-        # gives an AnalyzeInfo on success and a status string otherwise.
-        if self.input and self.input.stage == "analyzed":
-            print("[lab] analyzed", self.input.fragment_id, "-", self.input.rarity)
-        else:
-            print("[lab] analyze deferred:", result)
+        if result.status != "ok":
+            print("[lab] analyze:", result.message)
+            sleep(IDLE_SLEEP)
+            continue
+
+        info = result.info
+        recipes[info.fragment_id] = info.required_recipe
+        per_sample = recipe_cost(info.required_recipe)
+        print("[lab] analyzed", info.name, "-", info.rarity,
+              "- costs", per_sample, "cr per sample")
+
+        # A newly priced fragment can change the order's economics.
+        report_order_economics()
+        continue
+
+    # --- analyzed: does the ACTIVE order still want this fragment? ----------
+    fragment = specimen.fragment_id
+    remaining = active_remaining()
+
+    if not remaining.has(fragment):
+        # analyze() already catalogued it and recorded its recipe, which was
+        # the value of the trip. Extracting would spend reagents for nothing.
+        result = self.discard()
+        print("[lab] active order does not need", fragment, "- discarded")
+        if result.status != "ok":
+            print("[lab] discard:", result.message)
             sleep(IDLE_SLEEP)
         continue
 
-    # --- analyzed: is this species still worth reagents? --------------------
-    short = outstanding_demand()
-    if not short.has(spec.fragment_id):
-        result = self.discard()
-        if CATALOG_MODE:
-            # The analyze() above already wrote the catalog entry and the
-            # journal coords — that was the whole point of the trip.
-            print("[lab] cataloged", spec.fragment_id, "- discard", result)
-        else:
-            print("[lab] no open order needs", spec.fragment_id, "- discard", result)
-        if result == "inventory_full":
-            make_room()
+    # --- affordability gate -------------------------------------------------
+    recipe = specimen.recipe
+    cost = recipe_cost(recipe)
+    if cost > commander.get_credits():
+        if reported_for != fragment:
+            print("[lab] cannot afford", fragment, "-", cost, "cr needed,",
+                  commander.get_credits(), "on hand")
+            reported_for = fragment
+        sleep(DEMAND_SLEEP)
         continue
 
-    # --- build the procedure from the recipe + current inventory ------------
-    fragment = spec.fragment_id
-    still_short = short[fragment]
-    recipe = spec.recipe
-    steps = build_procedure(recipe)
-    print("[lab] procedure for", fragment, ":", describe(steps))
+    reported_for = ""
 
-    status = run_procedure(steps, recipe)
+    # --- stage the recipe and extract ---------------------------------------
+    if not stage_recipe(recipe):
+        sleep(DEMAND_SLEEP)
+        continue
 
-    if status == "ok":
-        remaining = still_short - 1
-        print("[lab] extracted 1x", fragment, "-", remaining, "still short")
-    elif status == "inventory_full":
-        print("[lab] inventory full — specimen and reagents held, retrying")
-        sleep(1)
-    elif status == "short_reagents":
-        print("[lab] procedure stalled on reagents — waiting")
-        sleep(1)
-    elif status == "recipe_mismatch":
-        # Should be unreachable: loaded_matches() gates extract().
-        print("[lab] RECIPE MISMATCH — reagents lost, specimen preserved")
-    elif status == "bench_reset":
-        sleep(IDLE_SLEEP)
+    if not bench_matches(recipe):
+        # Wrong or stale bench. unload_reagents() recovers them intact via
+        # the output port; extracting now would destroy them.
+        print("[lab] chamber does not match recipe — recovering reagents")
+        self.unload_reagents()
+        drain_output()
+        continue
+
+    result = self.extract()
+    if result.status == "ok":
+        left = remaining[fragment] - 1
+        print("[lab] extracted", fragment, "for", cost, "cr -", left, "still needed")
+        drain_output()
     else:
-        # busy / input_empty / not_analyzed — transient, re-read state.
-        print("[lab] extract returned", status)
+        print("[lab] extract:", result.message)
         sleep(IDLE_SLEEP)

@@ -5,6 +5,12 @@ NUM = re.compile(r'-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?')
 KW = re.compile(r'null|true|false|undefined|void 0')
 IDENT = re.compile(r'[A-Za-z_$][A-Za-z0-9_$]*')
 KEY = re.compile(r'[A-Za-z0-9_$]+')
+MEMBER = re.compile(r'\.([A-Za-z_$][\w$]*)')
+ACCESSOR = re.compile(r'(get|set)\s+([A-Za-z_$][\w$]*)\s*(?=\()')
+TRANS_KEY = re.compile(r'return\s+[\w$.]+\(' + chr(96) + r'([^' + chr(96) + r']+)' + chr(96) + r'\)')
+# Some getters wrap the call in a conditional; fall back to the last key mentioned,
+# which is the unconditional branch.
+ANY_TRANS_KEY = re.compile(r'[\w$.]+\(' + chr(96) + r'([^' + chr(96) + r'{}]+)' + chr(96) + r'[,)]')
 
 ESC = {'n': '\n', 't': '\t', 'r': '\r', 'b': '\b', 'f': '\f', 'v': '\v', '0': '\0'}
 
@@ -20,14 +26,28 @@ class P:
 
     def value(self):
         v = self.value_head()
-        while self.s.startswith('.join(', self.i):
-            self.i += 6
-            sep = self.value_head()
-            self.ws()
-            assert self.s[self.i] == ')'
-            self.i += 1
-            if isinstance(v, list):
-                v = (sep if isinstance(sep, str) else '').join(str(x) for x in v)
+        while self.i < len(self.s):
+            if self.s.startswith('.join(', self.i):
+                self.i += 6
+                sep = self.value_head()
+                self.ws()
+                assert self.s[self.i] == ')'
+                self.i += 1
+                if isinstance(v, list):
+                    v = (sep if isinstance(sep, str) else '').join(str(x) for x in v)
+                continue
+            # `outcomeContract:H(`boot`,[...])` — helper calls stand in for data the
+            # bundler builds at runtime. Record the callee and skip the arguments.
+            if self.s[self.i] == '(' and isinstance(v, dict) and '__ref__' in v:
+                args = self.skip_block('(', ')')
+                v = {'__call__': v['__ref__'], '__args__': args}
+                continue
+            m = MEMBER.match(self.s, self.i)
+            if m and isinstance(v, dict) and ('__ref__' in v or '__call__' in v):
+                self.i = m.end()
+                v = {'__ref__': (v.get('__ref__') or v['__call__']) + '.' + m.group(1)}
+                continue
+            break
         return v
 
     def value_head(self):
@@ -112,6 +132,25 @@ class P:
             self.i += 1
         return self.s[start:self.i]
 
+    def skip_block(self, open_ch, close_ch):
+        """Consume a balanced `open_ch ... close_ch` run and return its text."""
+        start = self.i
+        depth = 0
+        while self.i < len(self.s):
+            c = self.s[self.i]
+            if c in '`"\'':
+                self.string()
+                continue
+            if c == open_ch:
+                depth += 1
+            elif c == close_ch:
+                depth -= 1
+                if depth == 0:
+                    self.i += 1
+                    return self.s[start:self.i]
+            self.i += 1
+        return self.s[start:self.i]
+
     def obj(self):
         self.i += 1
         d = {}
@@ -121,6 +160,42 @@ class P:
             return d
         while True:
             self.ws()
+            if self.s.startswith('...', self.i):     # object spread `{...$F()}`
+                spreads = d.setdefault('__spreads__', [])
+                spreads.append(self.skip_expr())
+                self.ws()
+                if self.s[self.i] == ',':
+                    self.i += 1
+                    self.ws()
+                if self.s[self.i] == '}':
+                    self.i += 1
+                    return d
+                continue
+            # Accessors and shorthand methods: `get description(){return F(`key`)}`.
+            # The bundler emits these for lazily-translated fields, so recover the
+            # translation key as `<name>Key` and skip anything else callable.
+            acc = ACCESSOR.match(self.s, self.i)
+            if acc:
+                self.i = acc.end()
+                self.skip_block('(', ')')
+                self.ws()
+                body = self.skip_block('{', '}')
+                if acc.group(1) == 'get':
+                    key = TRANS_KEY.search(body)
+                    if key:
+                        d[acc.group(2) + 'Key'] = key.group(1)
+                    else:
+                        alts = ANY_TRANS_KEY.findall(body)
+                        if alts:
+                            d[acc.group(2) + 'Key'] = alts[-1]
+                self.ws()
+                if self.s[self.i] == ',':
+                    self.i += 1
+                    self.ws()
+                if self.s[self.i] == '}':
+                    self.i += 1
+                    return d
+                continue
             c = self.s[self.i]
             if c in '`"\'':
                 k = self.string()
@@ -135,6 +210,27 @@ class P:
                 k = m.group()
                 self.i = m.end()
             self.ws()
+            if self.s[self.i] == '(':          # shorthand method — not data
+                self.skip_block('(', ')')
+                self.ws()
+                self.skip_block('{', '}')
+                self.ws()
+                if self.s[self.i] == ',':
+                    self.i += 1
+                    self.ws()
+                if self.s[self.i] == '}':
+                    self.i += 1
+                    return d
+                continue
+            if self.s[self.i] in ',}':         # shorthand property `{a, b}`
+                d[k] = {'__ref__': k}
+                if self.s[self.i] == ',':
+                    self.i += 1
+                    self.ws()
+                if self.s[self.i] == '}':
+                    self.i += 1
+                    return d
+                continue
             assert self.s[self.i] == ':', (k, self.s[self.i:self.i + 40])
             self.i += 1
             d[k] = self.value()
