@@ -1,0 +1,6 @@
+# tools/build_docs.py
+brotli>=1.1
+
+# bin/ct_sync.py
+typer>=0.12
+watchdog>=4

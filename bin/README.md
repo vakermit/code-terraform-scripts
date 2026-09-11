@@ -1,0 +1,105 @@
+# ct_sync — fill the game's script slots from this repo
+
+When you add a script slot to a machine in Code: Terraform, the game creates an empty
+`.py` file in the save's external-editor directory. `ct_sync.py` watches that directory
+and fills each such file with the matching script from [`scripts/`](../scripts/), so the
+repo stays the source of truth and the game just receives copies.
+
+```bash
+python bin/ct_sync.py status     # what maps to what, and what each save file would do
+python bin/ct_sync.py once       # fill everything fillable right now, then exit
+python bin/ct_sync.py watch      # keep running; fill files as the game creates them
+```
+
+## Where it looks
+
+| | Default | Override |
+| --- | --- | --- |
+| Save directory | newest `%APPDATA%\io.codeterraform.game\save_*_scripts` | `--save-dir` / `CT_SAVE_DIR` |
+| Script tree | `scripts/` in this repo | `--scripts-dir` / `CT_SCRIPTS_DIR` |
+
+The active save changes with each playthrough, so auto-detection picks the most recently
+modified one and prints which it chose. `watch` resolves this once at startup — if you
+switch saves mid-session, restart it.
+
+## Matching
+
+A save file matches a repo script when their names agree **after dropping a trailing
+`_<number>`**. So `scripts/power/solar_1.py` fills `solar_1.py`, `solar_2.py` … `solar_6.py`,
+and `scripts/bio/bio_lab_1.py` fills `bio_lab_3.py`. Subdirectories under `scripts/` are
+purely for organisation; only the file name matters.
+
+If two repo files reduce to the same base name, neither is used and `status` flags the
+ambiguity rather than guessing.
+
+## What counts as fillable
+
+A file is filled when it holds **no code**: blank, whitespace, comments only, or a single
+docstring — which is what the game leaves in a fresh slot. A file with real statements is
+never overwritten. `--strict` narrows this to truly blank files.
+
+The game does not always create the empty file. When it doesn't, create it yourself with
+**`xyz`** on the first line (`xyz`, `# xyz`, `"xyz"` all work) and it becomes fillable
+regardless of content. The marker is an explicit request, so it also overrides the
+"already has code" guard — drop `# xyz` on top of a stale script to force a re-sync. The
+old contents are copied to `.ct-sync-backups/` first. `--magic WORD` changes the marker,
+`--magic ""` disables it.
+
+## Slot numbers inside the script
+
+When `solar_1.py` fills `solar_3.py`, the script's **own** id is rewritten to match the
+slot: `solar_1` → `solar_3`, wherever it appears. Nothing else is touched. Other numbered
+ids (`bio_exchange_1`, `rover_2`) name *different* machines with their own numbering, and
+comments that enumerate ids ("bio_exchange_1, bio_exchange_2, …") would be mangled by a
+blanket rename. Instead they are listed after the fill so you can check them:
+
+```
+  fill  bio_collector_3.py  <- scripts\bio\bio_collector_1.py  [bio_collector_1 -> bio_collector_3]
+        left as-is (check these): bio_exchange_1, bio_exchange_2
+```
+
+A source with no number (`boot.py`) is never rewritten — its base is a bare word that
+collides with real API names. `--no-renumber` copies verbatim.
+
+The robust fix is to not hard-code ids at all: use `self` for the machine the script
+runs on, and probe for siblings by type (see `find_machine()` in the `bio/` scripts).
+
+## Unmatched files
+
+A game file with no match is copied into **`scripts/_unmatched/`** (git-ignored) so it is
+in front of you. Write it there, then drag it into the right folder; the watcher sees it
+arrive and fills the game's copy. Delete it if the slot isn't worth a script.
+
+`_unmatched/` is never used as a source, staged files are never overwritten (you may be
+mid-edit), and only a *truly blank* staged file is removed once a real match appears.
+
+## The repo side is watched too
+
+`watch` also watches `scripts/` recursively. Adding, editing, renaming or deleting a
+script re-reads the tree and re-sweeps the save, so a script you add can fill an empty
+file that was already waiting for it. Edits don't reach already-filled game files (they
+have code); use the `xyz` marker for that.
+
+## What it never touches
+
+- Anything that isn't a top-level `.py` — so `.pyi` stubs, `codeterraform-scripts.json`,
+  `pyrightconfig.json`, `typeshed-LICENSE.txt`
+- `user_stubs.py` (the game promises never to overwrite it either)
+- the `lib/` subdirectory
+- the game's own `.codeterraform-retired-*` and `.codeterraform-write.bak` files
+
+Writes go to a temp file in the same directory and are then atomically replaced, so the
+game never observes a half-written script.
+
+## Options
+
+```
+--save-dir, -s     Save scripts directory (auto-detects the newest save)
+--scripts-dir      Repo script tree to sync from
+--dry-run, -n      Report what would change without writing
+--verbose, -v      Also report files that were skipped
+--strict           Only fill truly blank files
+--no-renumber      Copy verbatim; do not rewrite the script's own id
+--magic            Marker word (default xyz); empty string disables
+--poll             Poll instead of filesystem events (watch only)
+```

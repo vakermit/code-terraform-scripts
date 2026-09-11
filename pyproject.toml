@@ -1,0 +1,16 @@
+[project]
+name = "code-terraform-game"
+version = "0.1.0"
+description = "Scripts and tooling for Code: Terraform: sync scripts into the game, extract its Python docs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "brotli>=1.1",      # tools/build_docs.py
+    "typer>=0.12",      # bin/ct_sync.py
+    "watchdog>=4",      # bin/ct_sync.py
+]
+
+# This is a working directory of scripts, not an installable package: there is
+# nothing to build, so uv manages the environment and dependencies only.
+[tool.uv]
+package = false
