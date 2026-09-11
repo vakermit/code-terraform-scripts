@@ -13,11 +13,14 @@ variable name or byte offset. The frontend may be a single bundle (demo builds) 
 chunks (retail builds), so each registry is searched for across all of them.
 """
 import argparse
+import hashlib
 import io
+import json
 import os
 import re
 import struct
 import sys
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from jsparse import parse_at
@@ -32,6 +35,41 @@ BT = chr(96)                       # backtick, so this file stays paste-safe
 # Asset keys are URL-ish paths and DO include non-ASCII (e.g. "/audio/music/Maré Serena.mp3"),
 # so reject only control characters rather than allow-listing ASCII.
 ASSET_PATH = re.compile("^/[^" + chr(0) + "-" + chr(31) + "]{1,200}[.][A-Za-z0-9]{1,5}$")
+
+
+PROVENANCE = ".extracted-from.json"
+
+
+# ----------------------------------------------------------------- provenance
+def fingerprint(exe_path, game_dir):
+    """Identify the binary these docs came from — enough to know when to re-extract."""
+    h = hashlib.sha256()
+    with open(exe_path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    st = os.stat(exe_path)
+    release = None
+    rel_file = os.path.join(game_dir, ".from-release")
+    if os.path.exists(rel_file):
+        m = re.search(r"tag:\s*(\S+)", open(rel_file, encoding="utf-8").read())
+        release = m.group(1) if m else None
+    return {
+        "exe": os.path.basename(exe_path),
+        "install_dir": os.path.basename(os.path.normpath(game_dir)),
+        "size_bytes": st.st_size,
+        "sha256": h.hexdigest(),
+        "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc)
+                            .replace(microsecond=0).isoformat(),
+        "release": release,
+    }
+
+
+def read_provenance(out_dir):
+    try:
+        with open(os.path.join(out_dir, PROVENANCE), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
 
 
 # --------------------------------------------------------------------- assets
@@ -344,6 +382,11 @@ def main():
         exes, key=lambda f: os.path.getsize(os.path.join(args.game_dir, f))))
 
     print("reading %s" % exe)
+    source = fingerprint(exe, args.game_dir)
+    previous = read_provenance(args.out_dir)
+    if previous and previous.get("game", {}).get("sha256") == source["sha256"]:
+        print("  game binary unchanged since the last extract (%s)"
+              % previous.get("extracted_at", "?"))
     assets = read_assets(exe)
     print("  %d embedded assets" % len(assets))
     if args.dump_assets:
@@ -744,22 +787,49 @@ def main():
         rows.append(("[`stubs/`](stubs/)",
                      "%d type stubs shipped verbatim" % counts["stubs"]))
 
+    # -- provenance ---------------------------------------------------------
+    # The docs are derived from someone else's binary, so record exactly which one:
+    # enough to tell at a glance whether a game update warrants a re-extract.
+    source["embedded_assets"] = len(assets)
+    provenance = {
+        "schema": 1,
+        "game": source,
+        "extracted_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "tool": "tools/build_docs.py",
+        "counts": {k: v for k, v in counts.items() if v},
+    }
+    write(PROVENANCE, json.dumps(provenance, indent=2) + "\n")
+
+    built_from = "\n".join("| %s | %s |" % r for r in [
+        ("Release", "`%s`" % (source["release"] or "not recorded")),
+        ("Executable", "`%s`" % source["exe"]),
+        ("Size", "{:,} bytes".format(source["size_bytes"])),
+        ("SHA-256", "`%s`" % source["sha256"]),
+        ("File modified", source["modified"]),
+        ("Extracted", provenance["extracted_at"]),
+    ])
+
     write("README.md",
           "# Code: Terraform \u2014 Python Documentation\n\n"
-          "Extracted from `%s`. All game content lives inside the executable as\n"
-          "brotli-compressed embedded assets; this bundle is everything in there that\n"
-          "documents the in-game Python API and language.\n\n"
-          "Regenerate with:\n\n```bash\n"
-          "python tools/build_docs.py \"<game install folder>\" <output folder>\n```\n\n"
+          "All game content lives inside the executable as brotli-compressed embedded\n"
+          "assets; this bundle is everything in there that documents the in-game Python\n"
+          "API and language.\n\n"
+          "## Built from\n\n| | |\n| --- | --- |\n%s\n\n"
+          "The same fingerprint is in [`%s`](%s) for tooling. The extractor is not\n"
+          "part of this repository: it lives in the parent project as `tools/build_docs.py`\n"
+          "and is run against a game install:\n\n```bash\n"
+          "python tools/build_docs.py \"<game install folder>\" <this folder>\n```\n\n"
           "## Contents\n\n| Path | What it is |\n| --- | --- |\n%s\n\n"
           "## Where this came from\n\n"
           "Everything here is reconstructed from the frontend JavaScript, which holds the\n"
           "same API registries the in-game DOCS panel and editor autocomplete read from,\n"
           "joined against the game's English locale table. Descriptions, parameter docs,\n"
           "examples, raised exceptions and unlock gating all come from those registries.\n"
-          % (os.path.basename(exe), "\n".join("| %s | %s |" % r for r in rows)))
+          % (built_from, PROVENANCE, PROVENANCE,
+             "\n".join("| %s | %s |" % r for r in rows)))
 
     print("\nwrote %s" % args.out_dir)
+    print("  source       %s  sha256 %s..." % (source["exe"], source["sha256"][:12]))
     for k, v in counts.items():
         if v:
             print("  %-14s %d" % (k, v))

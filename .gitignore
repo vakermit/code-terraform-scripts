@@ -1,2 +1,9 @@
 __pycache__/
 *.pyc
+.ct-sync-backups/
+scripts/_unmatched/
+
+# Extracted game documentation: separate private repos, not owned by this project.
+# Regenerate with tools/build_docs.py against your own game install.
+docs/
+demo_docs/
