@@ -40,6 +40,12 @@ yourself with `xyz` on the first line and it becomes fillable whatever else it h
 overrides the "already has code" guard; the old contents are copied to
 `.ct-sync-backups/` first. `--magic` changes the word, `--magic ""` turns it off.
 
+`zyx` on the first line goes the other way: the game file is copied back into the
+matching repo script (slot id rewritten to the repo file's, previous content backed up),
+and the marker is removed from the game file. `zyx mid` targets a variant. With no
+matching repo script the content lands in `_unmatched/`. A marked file holding no code
+is refused, since that is the one way a pull could wipe a script.
+
 Only top-level `.py` files are touched. `.pyi` stubs, `.json`, `user_stubs.py`, the
 `lib/` subdirectory and the game's own scratch files are left alone, and an unmarked
 file that already contains code is never overwritten.
@@ -73,7 +79,8 @@ SKIP_DIRS = {"lib"}
 SKIP_SUFFIXES = (".codeterraform-write.bak",)
 SKIP_PATTERNS = (re.compile(r"\.codeterraform-retired-"),)
 TRAILING_INDEX = re.compile(r"_\d+$")
-DEFAULT_MAGIC = "xyz"
+DEFAULT_MAGIC = "xyz"               # game file -> filled from the repo
+DEFAULT_PULL = "zyx"                # game file -> copied back into the repo
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -87,6 +94,7 @@ class Options:
     verbose: bool = False
     renumber: bool = True
     magic: str = DEFAULT_MAGIC
+    pull: str = DEFAULT_PULL
     variant: str = ""
 
     @property
@@ -412,6 +420,77 @@ def tidy_unmatched(index, opts: Options) -> None:
             pass
 
 
+def backup(path: Path) -> None:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    shutil.copy2(path, BACKUP_DIR / ("%s.%s.py" % (path.stem, stamp)))
+
+
+def write_atomic(path: Path, body: str) -> bool:
+    """Temp file in the same directory, then replace: no reader sees a half-written file."""
+    tmp = path.with_name(path.name + ".ct-sync-tmp")
+    try:
+        tmp.write_text(body, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        err("  fail  %-28s %s" % (path.name, exc))
+        tmp.unlink(missing_ok=True)
+        return False
+
+
+def pull_file(path: Path, text: str, want: Optional[str], index, opts: Options) -> bool:
+    """Copy a game file marked `zyx` back into the repo, then drop the marker.
+
+    The reverse of a fill: the game's slot id is rewritten to the repo file's
+    (`bio_lab_3` -> `bio_lab_1`), the repo file is backed up before being replaced,
+    and the marker is removed from the game file so it is not pulled again. With no
+    matching repo script the content lands in `_unmatched/`, ready to drag into place.
+    """
+    body = strip_magic(text, opts.pull)
+    if is_empty(body, strict=False):
+        warn("  skip  %-28s marked %r but holds no code; nothing to pull" % (path.name, opts.pull))
+        return False
+
+    group = index.get(base_name(path.stem))
+    if group is not None:
+        target, how = group.select(want, opts.variant)
+        if target is None:
+            warn("  skip  %-28s %s" % (path.name, how))
+            return False
+    else:
+        target, how = opts.unmatched_dir / path.name, "new, staged"
+
+    note = None
+    if opts.renumber:
+        body, _, note = renumber(body, path.stem, target.stem)
+    parts = [opts.pull] + ([how] if how else []) + ([note] if note else [])
+    suffix = "  [%s]" % ", ".join(parts)
+
+    if opts.dry_run:
+        ok("  would pull %-24s -> %s%s" % (path.name, show(target), suffix))
+        return True
+
+    existing = read(target) if target.exists() else None
+    if existing != body:
+        if existing is not None and existing.strip():
+            backup(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not write_atomic(target, body):
+            return False
+        ok("  pull  %-28s -> %s%s" % (path.name, show(target), suffix))
+        if note:
+            others = other_numbered_ids(body, base_name(target.stem))
+            if others:
+                warn("        left as-is (check these): %s" % ", ".join(others))
+    else:
+        typer.echo("  pull  %-28s -> %s   already identical" % (path.name, show(target)))
+
+    # Drop the marker so the next sweep treats this as an ordinary script with code.
+    write_atomic(path, strip_magic(text, opts.pull))
+    return True
+
+
 def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> bool:
     """Fill one save script from the repo. True if it was written."""
     if not is_candidate(path, opts.save_dir):
@@ -419,6 +498,9 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
     text = read(path)
     if text is None:
         return False
+    pulled, want = parse_magic(text, opts.pull)
+    if pulled:
+        return pull_file(path, text, want, index, opts)
     marked, want = parse_magic(text, opts.magic)
     if not marked and not is_empty(text, opts.strict):
         if not quiet_skips:
@@ -467,19 +549,8 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
         return True
 
     if text.strip():                      # had a stub worth keeping a copy of
-        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        shutil.copy2(path, BACKUP_DIR / ("%s.%s.py" % (path.stem, stamp)))
-
-    # Write via a temp file in the same directory, then replace, so the game never
-    # observes a half-written script.
-    tmp = path.with_name(path.name + ".ct-sync-tmp")
-    try:
-        tmp.write_text(body, encoding="utf-8", newline="\n")
-        os.replace(tmp, path)
-    except OSError as exc:
-        err("  fail  %-28s %s" % (path.name, exc))
-        tmp.unlink(missing_ok=True)
+        backup(path)
+    if not write_atomic(path, body):
         return False
     ok("  fill  %-28s <- %s%s" % (path.name, show(source), suffix))
     if note:
@@ -513,26 +584,29 @@ NoRenumberOpt = typer.Option(False, "--no-renumber",
 MagicOpt = typer.Option(DEFAULT_MAGIC, "--magic", envvar="CT_MAGIC",
                         help="Marker that makes a file fillable whatever it holds. "
                              "Empty string disables it.")
+PullOpt = typer.Option(DEFAULT_PULL, "--pull-magic", envvar="CT_PULL_MAGIC",
+                       help="Marker that copies a game file back into the repo. "
+                            "Empty string disables it.")
 VariantOpt = typer.Option("", "--variant", envvar="CT_VARIANT",
                           help="Default variant (subdirectory) when a script has several "
                                "and no .current file or marker chooses.")
 
 
 def make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic,
-              variant="") -> Options:
+              variant="", pull=DEFAULT_PULL) -> Options:
     save = resolve_save(save_dir)
     if not scripts_dir.is_dir():
         err("Not a directory: %s" % scripts_dir)
         raise typer.Exit(2)
-    return Options(save, scripts_dir, strict, dry_run, verbose, not no_renumber, magic, variant)
+    return Options(save, scripts_dir, strict, dry_run, verbose, not no_renumber, magic, pull, variant)
 
 
 @app.command()
 def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
            strict: bool = StrictOpt, no_renumber: bool = NoRenumberOpt,
-           magic: str = MagicOpt, variant: str = VariantOpt):
+           magic: str = MagicOpt, variant: str = VariantOpt, pull: str = PullOpt):
     """Show the repo-to-save mapping and what each save script would do."""
-    opts = make_opts(save_dir, scripts_dir, strict, False, False, no_renumber, magic, variant)
+    opts = make_opts(save_dir, scripts_dir, strict, False, False, no_renumber, magic, variant, pull)
     index, conflicts = build_index(opts.scripts_dir)
 
     typer.echo("\nRepo scripts (%d):" % len(index))
@@ -563,10 +637,20 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
     for path in files:
         text = read(path) or ""
         group = index.get(base_name(path.stem))
+        pulled, pull_want = parse_magic(text, opts.pull)
         marked, want = parse_magic(text, opts.magic)
         fillable = marked or is_empty(text, opts.strict)
         source, how = group.select(want, opts.variant) if group else (None, None)
-        if not fillable:
+        if pulled:
+            if is_empty(strip_magic(text, opts.pull), False):
+                state = "marked %r but holds no code; nothing to pull" % opts.pull
+            elif group is None:
+                state = "marked %r -> would pull to %s" % (opts.pull, show(opts.unmatched_dir / path.name))
+            else:
+                target, phow = group.select(pull_want, opts.variant)
+                state = ("marked %r -> would pull to %s%s" % (opts.pull, show(target), "  [%s]" % phow if phow else "")
+                         if target else "marked %r, unresolved: %s" % (opts.pull, phow))
+        elif not fillable:
             state = "has code, left alone"
         elif group is None:
             state = ("marked %r, " % opts.magic if marked else "empty, ") + "no match -> would stage"
@@ -589,14 +673,14 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
 def once(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
          strict: bool = StrictOpt, dry_run: bool = DryOpt, verbose: bool = VerboseOpt,
          no_renumber: bool = NoRenumberOpt, magic: str = MagicOpt,
-         variant: str = VariantOpt):
+         variant: str = VariantOpt, pull: str = PullOpt):
     """Fill every empty script that is already in the save directory."""
-    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, variant)
+    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, variant, pull)
     index, conflicts = build_index(opts.scripts_dir)
     report_conflicts(conflicts)
     typer.echo("Syncing %s" % opts.save_dir)
     n = sync_all(index, opts)
-    typer.echo("%s %d file(s)." % ("Would fill" if dry_run else "Filled", n))
+    typer.echo("%s %d file(s)." % ("Would sync" if dry_run else "Synced", n))
 
 
 class Watcher:
@@ -692,11 +776,11 @@ class Events(FileSystemEventHandler):
 def watch(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
           strict: bool = StrictOpt, dry_run: bool = DryOpt, verbose: bool = VerboseOpt,
           no_renumber: bool = NoRenumberOpt, magic: str = MagicOpt,
-          variant: str = VariantOpt,
+          variant: str = VariantOpt, pull: str = PullOpt,
           poll: bool = typer.Option(False, "--poll",
                                     help="Poll instead of using filesystem events.")):
     """Watch the save directory, and the repo scripts, and fill as things appear."""
-    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, variant)
+    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, variant, pull)
     watcher = Watcher(opts)
     if not watcher.index:
         err("No scripts found under %s." % opts.scripts_dir)
@@ -707,7 +791,9 @@ def watch(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
                % (opts.scripts_dir, len(watcher.index)))
     typer.echo("Staging  %s for game files with no match" % show(opts.unmatched_dir))
     if magic:
-        typer.echo("Marker   %r at the top of a file makes it fillable" % magic)
+        typer.echo("Marker   %r at the top of a game file fills it from the repo" % magic)
+    if pull:
+        typer.echo("Marker   %r at the top of a game file copies it back into the repo" % pull)
     if dry_run:
         warn("Dry run: nothing will be written.")
     watcher.sweep()                                   # catch up on both sides

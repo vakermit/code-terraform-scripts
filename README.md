@@ -38,7 +38,7 @@ uv run bin/ct_sync.py watch        # or: python bin/ct_sync.py watch
 
 Whenever the game creates an empty script file for a machine, the watcher fills it with
 the matching script from `scripts/`. Add a script to `scripts/` and it is picked up
-immediately. Details, matching rules and the safety guards are in
+immediately. Tune a script in the game and put `zyx` on its first line to pull it back. Details, matching rules and the safety guards are in
 [`bin/README.md`](bin/README.md).
 
 ## The game documentation

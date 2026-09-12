@@ -40,10 +40,42 @@ IDLE_SLEEP = 0.5
 EMPTY_SLEEP = 5
 
 comms = get_component("comms")
+biome = self.outpost.biome
 
+
+def find_machine(kind, configured):
+    # Instance ids are numbered per save and a powered-down machine reads
+    # the same as a missing one; get_component() returns None either way.
+    if configured != "":
+        found = get_component(configured)
+        if found != None:
+            return found
+    found = get_component(kind)
+    if found != None:
+        return found
+    n = 1
+    while n <= 8:
+        found = get_component(kind + "_" + str(n))
+        if found != None:
+            return found
+        n = n + 1
+    return None
+
+
+# --- capability check ---------------------------------------------------------
+# Without the Signal Bus there is no job queue. Fall back to the early
+# behaviour: read the Exchange's active order directly and target cataloged
+# dots by fragment id.
+exchange = None
 if comms == None:
-    print("[collector] Signal Bus not researched — this is the mid-tier script;")
-    print("[collector] use scripts/bio/early until comms unlock.")
+    exchange = find_machine("bio_exchange", "")
+    if exchange == None:
+        print("[collector] DEGRADED: no Signal Bus and no Exchange — scouting only")
+    else:
+        print("[collector] DEGRADED: no Signal Bus — reading the Exchange's active order directly")
+else:
+    print("[collector] Signal Bus online — taking jobs from bio.jobs")
+print("[collector] this outpost's biome:", biome)
 
 
 # ------------------------------------------------------------------ scan ----
@@ -112,6 +144,39 @@ def requeue(job):
         print("[collector] could not requeue", job["name"], "-", sent.message)
 
 
+def direct_target(known):
+    # Degraded mode: nearest cataloged dot the Exchange's active order still
+    # needs, net of delivered and in_transit. Returns {"job", "spot"} shaped
+    # like claim_job() so the main loop does not care which path it came by.
+    if exchange == None:
+        return None
+    order = exchange.active_order()
+    if order == None:
+        return None
+
+    for spot in known:
+        frag = spot.fragment_id
+        need = order.requires.get(frag, 0)
+        need = need - order.delivered.get(frag, 0)
+        need = need - order.in_transit.get(frag, 0)
+        if need > 0:
+            job = {}
+            job["fragment_id"] = frag
+            job["name"] = spot.name
+            job["order"] = order.id
+            found = {}
+            found["job"] = job
+            found["spot"] = spot
+            return found
+    return None
+
+
+def next_job(known):
+    if comms != None:
+        return claim_job(known)
+    return direct_target(known)
+
+
 def plan_wants_scouting():
     if comms == None:
         return False
@@ -127,6 +192,7 @@ def publish_status(state, detail, known_count):
     status = {}
     status["state"] = state
     status["detail"] = detail
+    status["biome"] = biome
     status["cataloged_here"] = known_count
     comms.broadcast("bio.status.collector", status)
 
@@ -160,7 +226,7 @@ while True:
     job = None
 
     if not want_unknown:
-        claimed = claim_job(known)
+        claimed = next_job(known)
         if claimed != None:
             job = claimed["job"]
             target = claimed["spot"]
@@ -174,9 +240,10 @@ while True:
         kind = "unknown"
 
     if target == None:
-        # Nothing unknown left and no job this biome can serve.
+        # Nothing unknown left and no job this biome can serve — usually the
+        # active order is for a different biome than this outpost sits in.
         if quiet != "idle":
-            print("[collector] biome fully cataloged and no serviceable jobs — idle")
+            print("[collector]", biome, "biome fully cataloged and no job needs it — idle")
             quiet = "idle"
         publish_status("idle", "", len(known))
         sleep(EMPTY_SLEEP)

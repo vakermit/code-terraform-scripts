@@ -72,13 +72,28 @@ research = get_component("research")
 comms = get_component("comms")
 notebook = get_component("notebook")
 
+# --- capability check ---------------------------------------------------------
+# Each missing system has a fallback; the script says which mode it is in.
+#   comms     missing -> read the Exchange's active order directly
+#   notebook  missing -> price book lives for this run only
+exchange = None
 if collector == None:
     print("[lab] no Bio Collector found — is it powered on?")
+
 if comms == None:
-    print("[lab] Signal Bus not researched — this is the mid-tier script;")
-    print("[lab] use scripts/bio/early until comms unlock.")
+    exchange = find_machine("bio_exchange", "")
+    if exchange == None:
+        print("[lab] DEGRADED: no Signal Bus and no Exchange — catalog mode only")
+    else:
+        print("[lab] DEGRADED: no Signal Bus — reading the Exchange's active order directly")
+else:
+    print("[lab] Signal Bus online — following bio.plan, publishing bio.prices")
+
 if notebook == None:
-    print("[lab] Data Archive not researched — prices will not survive a restart")
+    print("[lab] DEGRADED: no Data Archive — prices are re-learned after a restart")
+else:
+    print("[lab] Data Archive online — prices persist")
+
 if not research.is_unlocked("research_auto_feeders"):
     print("[lab] Auto Feeders is not researched — self.input.take() and")
     print("[lab] self.output.send() will not move anything yet.")
@@ -132,15 +147,35 @@ def learn(info):
 
 # ------------------------------------------------------------------ plan ----
 
+def plan_remaining():
+    # {fragment_id: n} the active order is still owed. From the bus when the
+    # Signal Bus is up; straight from the Exchange when it is not.
+    if comms != None:
+        plan = comms.latest("bio.plan")
+        if plan == None:
+            return {}
+        return plan["remaining"]
+
+    if exchange == None:
+        return {}
+    order = exchange.active_order()
+    if order == None:
+        return {}
+
+    remaining = {}
+    for frag in order.requires.keys():
+        need = order.requires[frag]
+        need = need - order.delivered.get(frag, 0)
+        need = need - order.in_transit.get(frag, 0)
+        if need > 0:
+            remaining[frag] = need
+    return remaining
+
+
 def wanted_count(fragment_id):
     # How many more samples of this fragment the plan wants MADE:
     # the active order's remaining need minus what the store already holds.
-    if comms == None:
-        return 0
-    plan = comms.latest("bio.plan")
-    if plan == None:
-        return 0
-    remaining = plan["remaining"]
+    remaining = plan_remaining()
     if not remaining.has(fragment_id):
         return 0
     return remaining[fragment_id] - inventory.count(fragment_id)

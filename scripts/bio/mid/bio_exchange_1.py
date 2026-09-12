@@ -60,15 +60,43 @@ inventory = get_component("inventory")
 catalog = get_component("item_catalog")
 commander = get_component("commander")
 research = get_component("research")
+network = get_component("outpost_network")
 comms = get_component("comms")
 
+# --- capability check ---------------------------------------------------------
+# Without the Signal Bus this script still picks and fills orders on its own,
+# ranking on the rarity proxy alone; it just cannot publish a plan or jobs.
+# The Collector and Lab detect the same absence and read this Exchange's
+# active order directly instead.
 if comms == None:
-    print("[exchange] Signal Bus not researched — this is the mid-tier script;")
-    print("[exchange] use scripts/bio/early until comms unlock.")
+    print("[exchange] DEGRADED: Signal Bus not researched — no plan, no jobs,")
+    print("[exchange] ranking on rarity only. Collector/Lab will read me directly.")
+else:
+    print("[exchange] Signal Bus online — publishing bio.plan and bio.jobs")
 
 if not research.is_unlocked("research_auto_feeders"):
     print("[exchange] Auto Feeders is not researched — self.input.take()")
     print("[exchange] cannot stage samples yet; deliver from the workbench.")
+
+
+# ------------------------------------------------------------ coverage ----
+
+def serviceable_biomes():
+    # Biomes that have a POWERED Bio Collector at some outpost. An order for
+    # any other biome cannot be collected for, however good it looks.
+    biomes = []
+    for outpost in network.outposts():
+        for building in outpost.buildings("bio_collector"):
+            if building.powered and outpost.biome not in biomes:
+                biomes.append(outpost.biome)
+    return biomes
+
+
+coverage = serviceable_biomes()
+if len(coverage) == 0:
+    print("[exchange] no powered Bio Collector at any outpost — nothing can be collected")
+else:
+    print("[exchange] can collect in:", ", ".join(coverage))
 
 
 # ---------------------------------------------------------------- prices ----
@@ -168,7 +196,7 @@ def better(a, b):
     return a["to_make"] < b["to_make"]
 
 
-def choose(orders):
+def choose(orders, biomes):
     book = price_book()
     rate = guess_rate(book)
 
@@ -176,6 +204,11 @@ def choose(orders):
     cheapest = None
     for order in orders:
         if order.status == "complete":
+            continue
+        if order.biome not in biomes:
+            # No collector can reach these fragments — skip regardless of
+            # how good the margin looks. This is the check that stops a
+            # deep-biome order winning on a cheap frozen-biome price guess.
             continue
         a = assess(order, book, rate)
         if len(a["remaining"]) == 0:
@@ -292,12 +325,19 @@ def drain_output():
             print("[exchange] could not return", stack.id, "-", result.message)
 
 
-def stage_one(order):
+def stage_one(a):
     # Move one qualifying sample from the store into self.input.
-    # matches_order() is the authority: coastal orders want an exact glow
-    # and geothermal orders want exact genes, so the id alone is not enough.
+    #
+    # Gate on a["remaining"] — what the order is still OWED, net of
+    # delivered and in_transit — never on order.requires. Once a fragment's
+    # requirement is met, any surplus of it in the store must not be staged:
+    # deliver() would reject it with "no_input" and the port would hold it.
+    #
+    # matches_order() is still the authority on variants: coastal orders
+    # want an exact glow and geothermal orders want exact genes.
+    remaining = a["remaining"]
     for stack in inventory.stacks():
-        if order.requires.get(stack.id, 0) <= 0:
+        if remaining.get(stack.id, 0) <= 0:
             continue
         if not self.matches_order(stack.id, stack.properties):
             continue
@@ -307,9 +347,30 @@ def stage_one(order):
     return False
 
 
+def unstage():
+    # Return whatever is sitting in self.input to the store. Used when a
+    # staged sample stops qualifying — the order changed, or its requirement
+    # was met by another delivery — so the port cannot deadlock on it.
+    for stack in self.input.stacks():
+        result = self.input.eject(STORE, stack.id, stack.count, stack.properties, "exact")
+        if result.status != "ok":
+            print("[exchange] could not unstage", stack.id, "-", result.message)
+            return False
+        print("[exchange] returned", stack.count, "x", stack.id, "to the store")
+    return True
+
+
 # ------------------------------------------------------------------ loop ----
 
 announced = ""
+staged_for = ""
+passes = 0
+
+# The port keeps its contents across restarts, so anything left in it is
+# from a previous run and may not qualify for whatever gets chosen now.
+if self.input.count() > 0:
+    print("[exchange] input port not empty at startup — clearing it")
+    unstage()
 
 while True:
     if not ensure_ports():
@@ -318,9 +379,26 @@ while True:
 
     drain_output()
 
-    a = choose(self.orders())
+    # Coverage changes rarely (a collector built, powered, or lost), so
+    # re-read it every so often rather than every pass.
+    passes = passes + 1
+    if passes % 20 == 0:
+        fresh = serviceable_biomes()
+        if fresh != coverage:
+            coverage = fresh
+            print("[exchange] coverage changed — can collect in:", ", ".join(coverage))
+            announced = ""
+
+    a = choose(self.orders(), coverage)
     if a == None:
-        print("[exchange] every bio order is complete — stopping")
+        if len(coverage) == 0:
+            if announced != "no-coverage":
+                print("[exchange] waiting for a powered Bio Collector")
+                announced = "no-coverage"
+            publish_status("no-coverage", "")
+            sleep(IDLE_SLEEP * 10)
+            continue
+        print("[exchange] every reachable bio order is complete — stopping")
         if comms != None:
             comms.clear("bio.jobs")
             comms.broadcast("bio.plan", None)
@@ -353,9 +431,14 @@ while True:
             print("[exchange] bill exceeds credits — Lab will extract as it can afford")
         announced = order.id
 
+    # A sample staged for a previous order does not qualify for this one.
+    if staged_for != order.id and self.input.count() > 0:
+        unstage()
+    staged_for = order.id
+
     # Stage a qualifying sample, then hand it over.
     if self.input.count() == 0:
-        if not stage_one(order):
+        if not stage_one(a):
             publish_status("waiting", order.name)
             sleep(IDLE_SLEEP)
             continue
@@ -371,6 +454,12 @@ while True:
         announced = ""
     elif result.status == "busy":
         sleep(BUSY_SLEEP)
+    elif result.status == "no_input":
+        # The staged sample no longer qualifies. Put it back rather than
+        # retrying forever with the port held; the next pass re-stages
+        # against fresh remaining counts.
+        unstage()
+        sleep(IDLE_SLEEP)
     else:
         print("[exchange] deliver:", result.message)
         sleep(IDLE_SLEEP)

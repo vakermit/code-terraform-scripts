@@ -84,6 +84,26 @@ regardless of content. The marker is an explicit request, so it also overrides t
 old contents are copied to `.ct-sync-backups/` first. `--magic WORD` changes the marker,
 `--magic ""` disables it.
 
+## The other direction: `zyx` pulls a game file into the repo
+
+Tuned a script in the game's editor and want to keep it? Put **`zyx`** on its first line.
+The next sweep copies it into the matching repo script and removes the marker:
+
+```
+  pull  solar_3.py   -> scripts\power\solar_1.py  [zyx, solar_3 -> solar_1]
+```
+
+It is the mirror of a fill: the slot id is rewritten the other way (`solar_3` → `solar_1`),
+`zyx mid` targets a variant and `.current` / `--variant` decide otherwise, and an
+ambiguous target is refused rather than guessed. The repo file's previous contents go
+to `.ct-sync-backups/` first, though the repo is git — `git diff` is the real safety net.
+
+With no matching repo script the content lands in `scripts/_unmatched/`, so "write it
+in the game, then `zyx` it" is a valid way to author a new script. A marked file that
+holds no code is refused, because that is the one way a pull could wipe a script.
+
+`--pull-magic WORD` / `CT_PULL_MAGIC` changes the marker; empty disables it.
+
 ## Slot numbers inside the script
 
 When `solar_1.py` fills `solar_3.py`, the script's **own** id is rewritten to match the
@@ -139,7 +159,8 @@ game never observes a half-written script.
 --verbose, -v      Also report files that were skipped
 --strict           Only fill truly blank files
 --no-renumber      Copy verbatim; do not rewrite the script's own id
---magic            Marker word (default xyz); empty string disables
+--magic            Fill marker (default xyz); empty string disables
+--pull-magic       Pull marker (default zyx); empty string disables
 --variant          Default variant for groups with no .current file
 --poll             Poll instead of filesystem events (watch only)
 ```
