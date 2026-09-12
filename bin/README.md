@@ -32,6 +32,45 @@ purely for organisation; only the file name matters.
 If two repo files reduce to the same base name, neither is used and `status` flags the
 ambiguity rather than guessing.
 
+## Variants: early / mid / late, v1 / v2
+
+Put alternative versions of a script in **subdirectories** of its group:
+
+```
+scripts/bio/
+├── .current              ← "mid"   (git-ignored; per-playthrough state)
+├── early/
+│   ├── bio_collector_1.py
+│   ├── bio_exchange_1.py
+│   └── bio_lab_1.py
+└── mid/
+    └── bio_lab_1.py      ← only the lab has a mid version so far
+```
+
+The directory name is the variant tag. Which one fills a slot is decided by, most
+specific first:
+
+1. **The marker in the game file** — `xyz mid` (also `xyz-mid`, `xyz:mid`) pulls that
+   variant into that one slot. Useful for trying the new version on a single machine.
+2. **`.current` in the group directory** — a one-line text file naming the default for
+   everything under it. `echo mid > scripts/bio/.current`. Changing it while `watch`
+   runs re-sweeps immediately. It is git-ignored because it is where *you* are in *this*
+   playthrough, not part of the scripts.
+3. **`--variant NAME`** / `CT_VARIANT` — a global default for groups with no `.current`.
+4. **A plain file beside the variant dirs** (`bio/bio_lab_1.py` next to `bio/mid/`) is
+   the implicit default when nothing else chooses.
+
+If none of those resolve it, the slot is skipped and `status` says which variants exist.
+
+**A variant directory can be partial.** Above, `bio_collector` has only one version, so
+it resolves to `early/` no matter what `.current` says — you can start `mid/` with a
+single file and grow it. `status` shows every group's variants with the chosen one in
+brackets and the reason.
+
+Why a text file rather than a symlink: symlinks need Developer Mode or admin on
+Windows and git's symlink support there is opt-in; a one-line file does the same job
+with none of that.
+
 ## What counts as fillable
 
 A file is filled when it holds **no code**: blank, whitespace, comments only, or a single
@@ -101,5 +140,6 @@ game never observes a half-written script.
 --strict           Only fill truly blank files
 --no-renumber      Copy verbatim; do not rewrite the script's own id
 --magic            Marker word (default xyz); empty string disables
+--variant          Default variant for groups with no .current file
 --poll             Poll instead of filesystem events (watch only)
 ```

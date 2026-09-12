@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .ct-sync-backups/
 scripts/_unmatched/
+.current
 
 # Extracted game documentation: separate private repos, not owned by this project.
 # Regenerate with tools/build_docs.py against your own game install.
