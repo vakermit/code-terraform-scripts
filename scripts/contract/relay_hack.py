@@ -1,19 +1,23 @@
-
-
-code = [0, 0, 0, 0, 0, 0]
-lock = self.contract.lock
-
-for pos in range(6):
-    for num in range(100):
-        code[pos] = num
-        result = lock.intercept(code)
-        if result[pos]:
-            print(f"found - {pos} {code}")
-            break
-
-print(code)
+# CONTRACT: relay_hack
+# intercept(code) reports one True/False per tumbler, so each tumbler is
+# independent: hold the rest at 0 and sweep 0-99 until its flag flips.
+# Worst case 600 probes.
 
 transmitter = get_component("transmitter")
-transmitter.connect("earth")
-transmitter.transmit(self.contract.id, code)
+link = transmitter.connect("earth")
+if link.status != "ok":
+    print("[relay] transmitter:", link.message)
 
+lock = self.contract.lock
+code = [0, 0, 0, 0, 0, 0]
+
+for pos in range(lock.tumblers):
+    for value in range(lock.range):
+        code[pos] = value
+        if lock.intercept(code)[pos]:
+            break
+    print("[relay] tumbler", pos + 1, "=", code[pos])
+
+print("[relay] code:", code)
+sent = transmitter.transmit(self.contract.id, code)
+print("[relay]", sent.status, "-", sent.message)
