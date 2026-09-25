@@ -33,6 +33,7 @@
 #  per-sample costs and this becomes a true margin calculation.
 # =============================================================================
 
+from power import wait_for_charge
 from store import ensure_ports
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
 IDLE_SLEEP = 0.5       # waiting on the Lab to extract something deliverable
@@ -180,6 +181,11 @@ def stage_one(order):
 last_active = ""
 
 while True:
+    # Hold off starting work the grid cannot carry. Hysteretic: a job
+    # already running continues down to PAUSE_PCT, a new one waits for
+    # RESUME_PCT, so this does not flap around a single threshold.
+    wait_for_charge(self.id, "exchange")
+
     if not ensure_ports(self, STORE, "exchange"):
         sleep(IDLE_SLEEP)
         continue

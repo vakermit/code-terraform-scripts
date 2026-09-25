@@ -42,6 +42,7 @@
 #  connected — a stocked fluid recipe with an empty port waits forever.
 # =============================================================================
 
+from power import wait_for_charge
 from machines import find_machine
 from store import aim, bins, push, sink_for, source_for, stock_of
 
@@ -299,6 +300,11 @@ last_report = ""
 print("[fab]", len(bins()), "storage bins at", home.name)
 
 while True:
+    # Hold off starting work the grid cannot carry. Hysteretic: a job
+    # already running continues down to PAUSE_PCT, a new one waits for
+    # RESUME_PCT, so this does not flap around a single threshold.
+    wait_for_charge(self.id, "fab")
+
     drain()
 
     if self.is_running():

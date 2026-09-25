@@ -22,6 +22,7 @@
 #  the Rover can go and mine it.
 # =============================================================================
 
+from power import wait_for_charge
 from store import aim, bins, push, sink_for, source_for, stock_of
 
 STORE = "inventory"        # last-resort sink when no bin can take an item
@@ -206,6 +207,11 @@ last_note = ""
 print("[smelter]", len(bins()), "storage bins at", home.name)
 
 while True:
+    # Hold off starting work the grid cannot carry. Hysteretic: a job
+    # already running continues down to PAUSE_PCT, a new one waits for
+    # RESUME_PCT, so this does not flap around a single threshold.
+    wait_for_charge(self.id, "smelter")
+
     drain()
 
     pick = choose(demand())

@@ -32,6 +32,7 @@
 #    * the steady 1-in-EXPLORE_EVERY trip that keeps the catalog growing
 # =============================================================================
 
+from power import wait_for_charge
 from machines import find_machine
 
 BOOTSTRAP_KNOWN = 10      # cataloged dots to reach before jobs take priority
@@ -187,6 +188,11 @@ rotation = 0
 quiet = ""
 
 while True:
+    # Hold off starting work the grid cannot carry. Hysteretic: a job
+    # already running continues down to PAUSE_PCT, a new one waits for
+    # RESUME_PCT, so this does not flap around a single threshold.
+    wait_for_charge(self.id, "collector")
+
     # One cargo slot. If it is full the next move belongs to the Lab.
     if self.cargo:
         sleep(IDLE_SLEEP)

@@ -33,6 +33,7 @@
 #  dot so the catalog keeps growing for orders you have not activated yet.
 # =============================================================================
 
+from power import wait_for_charge
 from bio import active_remaining
 from machines import find_machine
 
@@ -87,6 +88,11 @@ rotation = 0
 last_state = ""
 
 while True:
+    # Hold off starting work the grid cannot carry. Hysteretic: a job
+    # already running continues down to PAUSE_PCT, a new one waits for
+    # RESUME_PCT, so this does not flap around a single threshold.
+    wait_for_charge(self.id, "collector")
+
     # One cargo slot. If it is full the next move belongs to the Lab.
     if self.cargo:
         sleep(IDLE_SLEEP)

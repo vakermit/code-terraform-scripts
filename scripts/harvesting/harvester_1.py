@@ -40,6 +40,8 @@
 #    clock.real_seconds_per_hour().
 # ============================================================
 
+from power import wait_for_charge
+
 SCANNER_ID    = "scanner_1"
 ROWS          = 8      # A-H
 COLS          = 24     # 1-24
@@ -277,6 +279,11 @@ say("harvester online at " + self.get_position() + ", heat " +
     str(self.get_heat()) + ", " + str(len(read_map())) + " items scanned")
 
 while True:
+    # Hold off starting work the grid cannot carry. Hysteretic: a job
+    # already running continues down to PAUSE_PCT, a new one waits for
+    # RESUME_PCT, so this does not flap around a single threshold.
+    wait_for_charge(self.id, "harvester")
+
     pts = read_map()
     if len(pts) == 0:
         if not idle_said:

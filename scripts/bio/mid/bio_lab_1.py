@@ -33,6 +33,7 @@
 #  forward; the output is drained to the store on every pass.
 # =============================================================================
 
+from power import wait_for_charge
 from store import ensure_ports
 from machines import find_machine
 
@@ -276,6 +277,11 @@ def bench_matches(recipe):
 blocked_on = ""
 
 while True:
+    # Hold off starting work the grid cannot carry. Hysteretic: a job
+    # already running continues down to PAUSE_PCT, a new one waits for
+    # RESUME_PCT, so this does not flap around a single threshold.
+    wait_for_charge(self.id, "lab")
+
     if not ensure_ports(self, STORE, "lab"):
         sleep(DEMAND_SLEEP)
         continue
