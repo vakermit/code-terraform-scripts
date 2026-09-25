@@ -27,7 +27,8 @@
 #  Inventory. Battery cost per meter is measured while driving.
 # =============================================================================
 
-from store import bins, sink_for, source_for, stock_of
+from signals import wanted_ores
+from store import aim, bins, sink_for, source_for, stock_of
 from util import key_of
 
 PLANET_ID = "nocturna"
@@ -117,22 +118,12 @@ def publish(state, detail):
 
 # ---------------------------------------------------------------- stores ----
 
-def aim(port, endpoint):
-    if port.connected_id() == endpoint:
-        return True
-    result = port.connect(endpoint)
-    if result.status != "ok":
-        print("[pioneer] connect", endpoint, ":", result.message)
-        return False
-    return True
-
-
 def load(item, count):
     # Pull `count` of item into cargo from home storage. Home only.
     moved = 0
     while moved < count:
         src = source_for(item)
-        if src == "" or not aim(self.input, src):
+        if src == "" or not aim(self.input, src, "pioneer"):
             break
         result = self.input.take(item, count - moved)
         if result.status != "ok" or result.moved == 0:
@@ -150,7 +141,7 @@ def unload():
     for stack in self.cargo.stacks():
         left = stack.count
         while left > 0:
-            if not aim(self.output, sink_for(stack.id)):
+            if not aim(self.output, sink_for(stack.id), "pioneer"):
                 return False
             result = self.output.send(stack.id, left, stack.properties, "exact")
             if result.status != "ok" or result.moved == 0:
@@ -359,21 +350,10 @@ def explore(p):
 
 # ----------------------------------------------------------------- mine ----
 
-def wanted_ores():
-    if comms != None:
-        published = comms.latest("factory.ore")
-        if published != None and len(published) > 0:
-            return published
-    wanted = {}
-    for item in WANTED_ITEMS:
-        wanted[item] = 1
-    return wanted
-
-
 def best_site():
     if not has_drill:
         return None
-    wanted = wanted_ores()
+    wanted = wanted_ores(WANTED_ITEMS)
     best = None
     best_score = 0
     for site in journal.surveyed_sites(PLANET_ID):

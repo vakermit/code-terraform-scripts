@@ -27,7 +27,7 @@
 #  to storage, since set_order() answers "cargo_present" until it is.
 # =============================================================================
 
-from store import bins, sink_for, source_for, stock_of
+from store import aim, bins, sink_for, source_for, stock_of
 
 STORE = "inventory"        # last-resort sink for leftovers
 ORDER_ID = ""              # pin an order id; "" = choose by score
@@ -49,21 +49,11 @@ if not research.is_unlocked("research_auto_feeders"):
 
 # ---------------------------------------------------------------- stores ----
 
-def aim(endpoint):
-    if self.input.connected_id() == endpoint:
-        return True
-    result = self.input.connect(endpoint)
-    if result.status != "ok":
-        print("[dock] connect", endpoint, ":", result.message)
-        return False
-    return True
-
-
 def pull(item, count):
     moved = 0
     while moved < count:
         src = source_for(item)
-        if src == "" or not aim(src):
+        if src == "" or not aim(self.input, src, "dock"):
             break
         result = self.input.take(item, count - moved)
         if result.status != "ok" or result.moved == 0:

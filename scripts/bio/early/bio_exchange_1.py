@@ -33,6 +33,7 @@
 #  per-sample costs and this becomes a true margin calculation.
 # =============================================================================
 
+from store import ensure_ports
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
 IDLE_SLEEP = 0.5       # waiting on the Lab to extract something deliverable
 BUSY_SLEEP = 0.25      # a delivery is already mid-flight
@@ -147,22 +148,6 @@ def pick_order(orders):
     return champion
 
 
-def ensure_ports():
-    if self.input.connected_id() != STORE:
-        result = self.input.connect(STORE)
-        if result.status != "ok":
-            print("[exchange] input connect failed:", result.message)
-            return False
-
-    if self.output.connected_id() != STORE:
-        result = self.output.connect(STORE)
-        if result.status != "ok":
-            print("[exchange] output connect failed:", result.message)
-            return False
-
-    return True
-
-
 def drain_output():
     # A shared order finished by another Exchange returns our committed
     # sample here. Put it back in the store so it can serve another order.
@@ -195,7 +180,7 @@ def stage_one(order):
 last_active = ""
 
 while True:
-    if not ensure_ports():
+    if not ensure_ports(self, STORE, "exchange"):
         sleep(IDLE_SLEEP)
         continue
 

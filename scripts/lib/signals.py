@@ -56,3 +56,12 @@ def field(d, key, default):
     if d == None or not d.has(key):
         return default
     return d[key]
+
+
+def wanted_ores(fallback_items=None, channel="factory.ore"):
+    """What the factory is short of, as {ore_id: units}.
+
+    Reads the Smelter's broadcast and falls back to a hard-coded want-list.
+    An empty result means "mine anything".
+    """
+    return latest_map(channel, fallback_items)

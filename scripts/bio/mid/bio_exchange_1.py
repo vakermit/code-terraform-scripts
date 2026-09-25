@@ -48,6 +48,7 @@
 #  Lab can at least chip at it as credits come in from elsewhere.
 # =============================================================================
 
+from store import ensure_ports
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
 IDLE_SLEEP = 0.5
 BUSY_SLEEP = 0.25
@@ -303,20 +304,6 @@ def publish_status(state, detail):
 
 # ----------------------------------------------------------------- ports ----
 
-def ensure_ports():
-    if self.input.connected_id() != STORE:
-        result = self.input.connect(STORE)
-        if result.status != "ok":
-            print("[exchange] input connect failed:", result.message)
-            return False
-    if self.output.connected_id() != STORE:
-        result = self.output.connect(STORE)
-        if result.status != "ok":
-            print("[exchange] output connect failed:", result.message)
-            return False
-    return True
-
-
 def drain_output():
     # A shared order finished elsewhere returns our committed sample here.
     for stack in self.output.stacks():
@@ -373,7 +360,7 @@ if self.input.count() > 0:
     unstage()
 
 while True:
-    if not ensure_ports():
+    if not ensure_ports(self, STORE, "exchange"):
         sleep(IDLE_SLEEP)
         continue
 

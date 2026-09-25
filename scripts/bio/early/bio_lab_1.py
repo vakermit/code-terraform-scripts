@@ -33,6 +33,8 @@
 #  turn rather than all staged at once.
 # =============================================================================
 
+from store import ensure_ports
+from bio import active_remaining
 from machines import find_machine
 
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
@@ -136,43 +138,7 @@ def report_order_economics():
 
 # ---------------------------------------------------------------- demand ----
 
-def active_remaining():
-    # What the ACTIVE order still needs, net of committed samples.
-    if exchange == None:
-        return {}
-
-    order = exchange.active_order()
-    if order == None:
-        return {}
-
-    remaining = {}
-    for frag in order.requires.keys():
-        short = order.requires[frag]
-        short = short - order.delivered.get(frag, 0)
-        short = short - order.in_transit.get(frag, 0)
-        if short > 0:
-            remaining[frag] = short
-    return remaining
-
-
 # ----------------------------------------------------------------- ports ----
-
-def ensure_ports():
-    # Both ports must point at the store before anything can move.
-    if self.input.connected_id() != STORE:
-        result = self.input.connect(STORE)
-        if result.status != "ok":
-            print("[lab] input connect failed:", result.message)
-            return False
-
-    if self.output.connected_id() != STORE:
-        result = self.output.connect(STORE)
-        if result.status != "ok":
-            print("[lab] output connect failed:", result.message)
-            return False
-
-    return True
-
 
 def drain_output():
     # Push finished samples and recovered reagents back to the store.
@@ -284,7 +250,7 @@ def bench_matches(recipe):
 reported_for = ""
 
 while True:
-    if not ensure_ports():
+    if not ensure_ports(self, STORE, "lab"):
         sleep(DEMAND_SLEEP)
         continue
 
@@ -325,7 +291,7 @@ while True:
 
     # --- analyzed: does the ACTIVE order still want this fragment? ----------
     fragment = specimen.fragment_id
-    remaining = active_remaining()
+    remaining = active_remaining(exchange)
 
     if not remaining.has(fragment):
         # analyze() already catalogued it and recorded its recipe, which was

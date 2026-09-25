@@ -43,7 +43,7 @@
 # =============================================================================
 
 from machines import find_machine
-from store import bins, sink_for, source_for, stock_of
+from store import aim, bins, push, sink_for, source_for, stock_of
 
 STORE = "inventory"
 TARGETS = {}               # fallback stock targets, e.g. {"iron_plate": 10}
@@ -191,22 +191,12 @@ def craftable_now(recipe):
 home = get_component("outpost_network").home()
 
 
-def aim(port, endpoint):
-    if port.connected_id() == endpoint:
-        return True
-    result = port.connect(endpoint)
-    if result.status != "ok":
-        print("[fab] connect", endpoint, ":", result.message)
-        return False
-    return True
-
-
 def pull(port, item, count):
     # Take up to `count`, switching sources as each one drains.
     moved = 0
     while moved < count:
         src = source_for(item)
-        if src == "" or not aim(port, src):
+        if src == "" or not aim(port, src, "fab"):
             break
         result = port.take(item, count - moved)
         if result.status != "ok" or result.moved == 0:
@@ -217,21 +207,6 @@ def pull(port, item, count):
     return moved
 
 
-def push(port, stack):
-    # Send a whole stack, splitting across sinks as bins fill.
-    left = stack.count
-    while left > 0:
-        if not aim(port, sink_for(stack.id)):
-            break
-        result = port.send(stack.id, left, stack.properties, "exact")
-        if result.status != "ok" or result.moved == 0:
-            if result.status != "ok":
-                print("[fab] send", stack.id, ":", result.message)
-            break
-        left = left - result.moved
-    return stack.count - left
-
-
 # ----------------------------------------------------------------- ports ----
 
 def drain():
@@ -240,7 +215,7 @@ def drain():
     ok = True
     for port in [self.output, self.byproduct]:
         for stack in port.stacks():
-            if push(port, stack) < stack.count:
+            if push(port, stack, "fab") < stack.count:
                 ok = False
     return ok
 

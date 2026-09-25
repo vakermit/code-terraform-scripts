@@ -31,6 +31,7 @@
 #  the trip plus a reserve. A hard floor on battery level backs that up.
 # =============================================================================
 
+from signals import wanted_ores
 from store import bins, sink_for
 from util import key_of
 
@@ -261,25 +262,12 @@ def explore(p):
 
 # ----------------------------------------------------------------- mine ----
 
-def wanted_ores():
-    # What the Smelter says it is short of (factory.ore), falling back to
-    # WANTED_ITEMS. {ore_id: units}; empty means mine anything.
-    if comms != None:
-        published = comms.latest("factory.ore")
-        if published != None and len(published) > 0:
-            return published
-    wanted = {}
-    for item in WANTED_ITEMS:
-        wanted[item] = 1
-    return wanted
-
-
 def best_site():
     # Highest-value mineable site the drill can handle: purity multiplier
     # divided by distance, so a rich site nearby beats a pure one far off.
     # Ore the factory is short of gets a strong preference; nothing is
     # excluded outright, so the rover keeps working when nothing is asked.
-    wanted = wanted_ores()
+    wanted = wanted_ores(WANTED_ITEMS)
     best = None
     best_score = 0
     for site in journal.surveyed_sites(PLANET_ID):

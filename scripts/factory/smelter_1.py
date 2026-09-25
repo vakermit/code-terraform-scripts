@@ -22,7 +22,7 @@
 #  the Rover can go and mine it.
 # =============================================================================
 
-from store import bins, sink_for, source_for, stock_of
+from store import aim, bins, push, sink_for, source_for, stock_of
 
 STORE = "inventory"        # last-resort sink when no bin can take an item
 FLOORS = {}                # minimum stock per ingot, e.g. {"iron_ingot": 20}
@@ -120,22 +120,12 @@ def choose(wanted):
 home = get_component("outpost_network").home()
 
 
-def aim(port, endpoint):
-    if port.connected_id() == endpoint:
-        return True
-    result = port.connect(endpoint)
-    if result.status != "ok":
-        print("[smelter] connect", endpoint, ":", result.message)
-        return False
-    return True
-
-
 def pull(port, item, count):
     # Take up to `count`, switching sources as each one drains.
     moved = 0
     while moved < count:
         src = source_for(item)
-        if src == "" or not aim(port, src):
+        if src == "" or not aim(port, src, "smelter"):
             break
         result = port.take(item, count - moved)
         if result.status != "ok" or result.moved == 0:
@@ -146,27 +136,12 @@ def pull(port, item, count):
     return moved
 
 
-def push(port, stack):
-    # Send a whole stack, splitting across sinks as bins fill.
-    left = stack.count
-    while left > 0:
-        if not aim(port, sink_for(stack.id)):
-            break
-        result = port.send(stack.id, left, stack.properties, "exact")
-        if result.status != "ok" or result.moved == 0:
-            if result.status != "ok":
-                print("[smelter] send", stack.id, ":", result.message)
-            break
-        left = left - result.moved
-    return stack.count - left
-
-
 def drain():
     # Push finished ingots out. Returns units moved, so the batch loop
     # counts what actually left rather than what was sitting there.
     moved = 0
     for stack in self.output.stacks():
-        moved = moved + push(self.output, stack)
+        moved = moved + push(self.output, stack, "smelter")
     return moved
 
 

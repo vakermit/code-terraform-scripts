@@ -33,6 +33,7 @@
 #  dot so the catalog keeps growing for orders you have not activated yet.
 # =============================================================================
 
+from bio import active_remaining
 from machines import find_machine
 
 BOOTSTRAP_UNKNOWNS = 10   # unknown dots to sample before targeting begins
@@ -50,28 +51,6 @@ exchange = find_machine("bio_exchange", EXCHANGE_ID)
 if exchange == None:
     print("[collector] no Bio Exchange found — is it powered on?")
     print("[collector] running unfocused: every trip samples an unknown dot")
-
-
-def active_remaining():
-    # What the ACTIVE order still needs, as {fragment_id: count}.
-    #
-    # Empty dict means there is nothing to focus on: no Exchange, no active
-    # order, or every requirement already delivered or committed.
-    if exchange == None:
-        return {}
-
-    order = exchange.active_order()
-    if order == None:
-        return {}
-
-    remaining = {}
-    for frag in order.requires.keys():
-        short = order.requires[frag]
-        short = short - order.delivered.get(frag, 0)
-        short = short - order.in_transit.get(frag, 0)
-        if short > 0:
-            remaining[frag] = short
-    return remaining
 
 
 def split_scan():
@@ -113,7 +92,7 @@ while True:
         sleep(IDLE_SLEEP)
         continue
 
-    remaining = active_remaining()
+    remaining = active_remaining(exchange)
     scanned = split_scan()
     known = scanned["known"]
     unknown = scanned["unknown"]

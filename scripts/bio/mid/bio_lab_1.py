@@ -33,6 +33,7 @@
 #  forward; the output is drained to the store on every pass.
 # =============================================================================
 
+from store import ensure_ports
 from machines import find_machine
 
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
@@ -177,20 +178,6 @@ def publish_status(state, detail):
 
 # ----------------------------------------------------------------- ports ----
 
-def ensure_ports():
-    if self.input.connected_id() != STORE:
-        result = self.input.connect(STORE)
-        if result.status != "ok":
-            print("[lab] input connect failed:", result.message)
-            return False
-    if self.output.connected_id() != STORE:
-        result = self.output.connect(STORE)
-        if result.status != "ok":
-            print("[lab] output connect failed:", result.message)
-            return False
-    return True
-
-
 def drain_output():
     # extract(), discard() and unload_reagents() all stage into the output
     # port and none of them forward; a full port stalls all three.
@@ -289,7 +276,7 @@ def bench_matches(recipe):
 blocked_on = ""
 
 while True:
-    if not ensure_ports():
+    if not ensure_ports(self, STORE, "lab"):
         sleep(DEMAND_SLEEP)
         continue
 
