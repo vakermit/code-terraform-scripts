@@ -132,6 +132,30 @@ arrive and fills the game's copy. Delete it if the slot isn't worth a script.
 `_unmatched/` is never used as a source, staged files are never overwritten (you may be
 mid-edit), and only a *truly blank* staged file is removed once a real match appears.
 
+## Libraries (`lib/`)
+
+Shared code lives in `scripts/lib/*.py` and is **mirrored** into the save's `lib/`,
+not slot-matched: the game never creates an empty library for us and there is no
+instance number to renumber, so the repo is simply the source of truth.
+
+```
+  lib   lib/store.py   <- scripts\lib\store.py   (new: Import as Game Library)
+```
+
+A file new to the save needs one in-game step, as that note says: the editor offers
+**Import as Game Library** for an unregistered file under `lib/`. After that the game
+tracks it in `libraryScripts` and picks up later edits automatically.
+
+A save copy that has diverged, because you edited it in game, is reported and **not**
+clobbered. Mark it with `xyz` to let the repo win. `build_index` skips `lib/`
+entirely, so a library is never mistaken for a machine script.
+
+Libraries cannot see a caller's globals — the game docs are explicit that "caller-local
+names are not" in scope. `get_component()` and the other top-level game functions *are*
+available, so a helper should resolve shared components itself rather than expect the
+importing script's variables. `self` and `panel` do not exist in a library; pass the
+machine in when a helper needs to act for the caller.
+
 ## The repo side is watched too
 
 `watch` also watches `scripts/` recursively. Adding, editing, renaming or deleting a

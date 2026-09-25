@@ -723,7 +723,9 @@ def main():
     counts["seeded"] = counts["contracts"] = counts["examples"] = 0
     if reg["seed_scripts"]:
         ch = home["seed_scripts"]
-        at = re.search(OPTIONAL["seed_scripts"], ch.s).start(1)
+        # OPTIONAL entries may be (pattern, opener) pairs; only the pattern matches.
+        pat = OPTIONAL["seed_scripts"]
+        at = re.search(pat[0] if isinstance(pat, tuple) else pat, ch.s).start()
         rows = []
         for slot, e in reg["seed_scripts"].items():
             if not isinstance(e, dict):
