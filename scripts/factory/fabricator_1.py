@@ -42,6 +42,9 @@
 #  connected — a stocked fluid recipe with an empty port waits forever.
 # =============================================================================
 
+from machines import find_machine
+from store import bins, sink_for, source_for, stock_of
+
 STORE = "inventory"
 TARGETS = {}               # fallback stock targets, e.g. {"iron_plate": 10}
 FLUIDS_OK = False          # allow steam / water / oil recipes
@@ -55,23 +58,6 @@ comms = get_component("comms")
 
 # Leave as "" to auto-detect, or paste the exact id from the machine card.
 SMELTER_ID = ""
-
-
-def find_machine(kind, configured):
-    if configured != "":
-        found = get_component(configured)
-        if found != None:
-            return found
-    found = get_component(kind)
-    if found != None:
-        return found
-    n = 1
-    while n <= 8:
-        found = get_component(kind + "_" + str(n))
-        if found != None:
-            return found
-        n = n + 1
-    return None
 
 
 smelter = find_machine("smelter", SMELTER_ID)
@@ -203,42 +189,6 @@ def craftable_now(recipe):
 # is only claimed once every latched one is full.
 
 home = get_component("outpost_network").home()
-
-
-def bins():
-    out = []
-    for ref in home.buildings("storage_bin"):
-        entry = {}
-        entry["id"] = ref.id
-        entry["bin"] = get_component(ref.id)
-        out.append(entry)
-    return out
-
-
-def stock_of(item):
-    total = inventory.count(item)
-    for b in bins():
-        total = total + b["bin"].count(item)
-    return total
-
-
-def source_for(item):
-    if inventory.count(item) > 0:
-        return "inventory"
-    for b in bins():
-        if b["bin"].count(item) > 0:
-            return b["id"]
-    return ""
-
-
-def sink_for(item):
-    for b in bins():
-        if b["bin"].get_material() == item and b["bin"].space() > 0:
-            return b["id"]
-    for b in bins():
-        if b["bin"].is_empty():
-            return b["id"]
-    return STORE
 
 
 def aim(port, endpoint):

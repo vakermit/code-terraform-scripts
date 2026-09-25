@@ -33,6 +33,8 @@
 #  dot so the catalog keeps growing for orders you have not activated yet.
 # =============================================================================
 
+from machines import find_machine
+
 BOOTSTRAP_UNKNOWNS = 10   # unknown dots to sample before targeting begins
 EXPLORE_EVERY = 5         # after that, every Nth trip is still an unknown dot
 
@@ -41,29 +43,6 @@ DEMAND_SLEEP = 5          # no active order to work toward
 
 # Leave as "" to auto-detect, or paste the exact id from the machine card.
 EXCHANGE_ID = ""
-
-
-def find_machine(kind, configured):
-    # Instance ids are numbered per save — bio_exchange_1, bio_exchange_2,
-    # ... — and a powered-down machine reads the same as a missing one.
-    # get_component() returns None for an unknown id rather than raising,
-    # so probing is safe: configured id, then bare type, then suffixes.
-    if configured != "":
-        found = get_component(configured)
-        if found != None:
-            return found
-
-    found = get_component(kind)
-    if found != None:
-        return found
-
-    n = 1
-    while n <= 8:
-        found = get_component(kind + "_" + str(n))
-        if found != None:
-            return found
-        n = n + 1
-    return None
 
 
 exchange = find_machine("bio_exchange", EXCHANGE_ID)

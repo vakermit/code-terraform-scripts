@@ -31,6 +31,9 @@
 #  the trip plus a reserve. A hard floor on battery level backs that up.
 # =============================================================================
 
+from store import bins, sink_for
+from util import key_of
+
 PLANET_ID = "nocturna"
 STORE = "inventory"        # unload target at home
 
@@ -85,10 +88,6 @@ print("[rover] sonar", self.sonar.tier(), "-", self.sonar.range(), "m;",
 # POI keys ("x:y") this run gave up on: scanned but never resolved (biomass
 # needs a drone), or survey refused (too hard / tier too low).
 skipped = []
-
-
-def key_of(x, y):
-    return str(x) + ":" + str(y)
 
 
 def publish(state, detail):
@@ -329,29 +328,6 @@ def mine_at(site):
 
 
 # --------------------------------------------------------------- unload ----
-
-def bins():
-    out = []
-    for ref in home.buildings("storage_bin"):
-        entry = {}
-        entry["id"] = ref.id
-        entry["bin"] = get_component(ref.id)
-        out.append(entry)
-    return out
-
-
-def sink_for(item):
-    # A bin already latched to this ore, then an empty bin, then Inventory.
-    # Bins latch to the first material they receive, so an empty bin is
-    # only claimed once every latched one is full.
-    for b in bins():
-        if b["bin"].get_material() == item and b["bin"].space() > 0:
-            return b["id"]
-    for b in bins():
-        if b["bin"].is_empty():
-            return b["id"]
-    return STORE
-
 
 def unload():
     if not can_unload:

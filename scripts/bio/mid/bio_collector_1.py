@@ -32,6 +32,8 @@
 #    * the steady 1-in-EXPLORE_EVERY trip that keeps the catalog growing
 # =============================================================================
 
+from machines import find_machine
+
 BOOTSTRAP_KNOWN = 10      # cataloged dots to reach before jobs take priority
 EXPLORE_EVERY = 5         # steady-state: every Nth trip samples an unknown dot
 SCOUT_EVERY = 2           # while plan.scout is set: every Nth trip instead
@@ -41,25 +43,6 @@ EMPTY_SLEEP = 5
 
 comms = get_component("comms")
 biome = self.outpost.biome
-
-
-def find_machine(kind, configured):
-    # Instance ids are numbered per save and a powered-down machine reads
-    # the same as a missing one; get_component() returns None either way.
-    if configured != "":
-        found = get_component(configured)
-        if found != None:
-            return found
-    found = get_component(kind)
-    if found != None:
-        return found
-    n = 1
-    while n <= 8:
-        found = get_component(kind + "_" + str(n))
-        if found != None:
-            return found
-        n = n + 1
-    return None
 
 
 # --- capability check ---------------------------------------------------------

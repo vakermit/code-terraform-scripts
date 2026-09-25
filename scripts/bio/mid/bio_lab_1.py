@@ -33,6 +33,8 @@
 #  forward; the output is drained to the store on every pass.
 # =============================================================================
 
+from machines import find_machine
+
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
 REAGENT_BUFFER = 5     # spare units to keep beyond the recipe's need
 CREDIT_FLOOR = 200     # never spend below this on optional buffer stock
@@ -43,25 +45,6 @@ BOOK_KEY = "bio.prices"   # Data Archive key and Signal Bus channel
 
 # Leave as "" to auto-detect, or paste the exact id from the machine card.
 COLLECTOR_ID = ""
-
-
-def find_machine(kind, configured):
-    # Instance ids are numbered per save and a powered-down machine reads
-    # the same as a missing one; get_component() returns None either way.
-    if configured != "":
-        found = get_component(configured)
-        if found != None:
-            return found
-    found = get_component(kind)
-    if found != None:
-        return found
-    n = 1
-    while n <= 8:
-        found = get_component(kind + "_" + str(n))
-        if found != None:
-            return found
-        n = n + 1
-    return None
 
 
 collector = find_machine("bio_collector", COLLECTOR_ID)

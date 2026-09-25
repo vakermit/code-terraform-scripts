@@ -70,6 +70,7 @@ DEFAULT_SCRIPTS = REPO / "scripts"
 BACKUP_DIR = REPO / ".ct-sync-backups"
 UNMATCHED = "_unmatched"            # under scripts/; staged, never a source
 CURRENT = ".current"                # per-directory variant pointer; git-ignored
+LIB = "lib"                         # shared Library scripts, mirrored repo -> save
 SAVE_GLOB = "save_*_scripts"
 GAME_DIR = "io.codeterraform.game"
 
@@ -249,8 +250,9 @@ def build_index(scripts_dir: Path):
     """
     by_base = {}
     for path in sorted(scripts_dir.rglob("*.py")):
-        if UNMATCHED in path.relative_to(scripts_dir).parts:
-            continue
+        parts = path.relative_to(scripts_dir).parts
+        if UNMATCHED in parts or LIB in parts:
+            continue                    # staged files, and libraries (mirrored, not matched)
         by_base.setdefault(base_name(path.stem), []).append(path)
 
     index, conflicts = {}, {}
@@ -562,8 +564,52 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
     return True
 
 
-def sync_all(index, opts: Options) -> int:
+def sync_libs(opts: Options) -> int:
+    """Mirror repo `scripts/lib/*.py` into the save's `lib/`.
+
+    Libraries are not slot-filling: the game never creates an empty one for us and
+    there is no instance number to renumber, so this is a straight mirror with the
+    repo as source of truth. A save copy that has diverged (edited in game) is
+    reported rather than clobbered, unless it carries the fill marker.
+
+    A file new to the save still needs one in-game step: the editor offers
+    "Import as Game Library" for an unregistered file under lib/.
+    """
+    src_dir = opts.scripts_dir / LIB
+    if not src_dir.is_dir():
+        return 0
+    dst_dir = opts.save_dir / LIB
     written = 0
+    for src in sorted(src_dir.glob("*.py")):
+        body = read(src)
+        if body is None:
+            continue
+        dst = dst_dir / src.name
+        current = read(dst) if dst.exists() else None
+        if current == body:
+            continue
+        if current is not None and current.strip() and not has_magic(current, opts.magic):
+            if not is_empty(current, opts.strict):
+                warn("  lib   %-28s differs in game; not clobbered (mark %r to overwrite)"
+                     % (LIB + "/" + src.name, opts.magic))
+                continue
+        if opts.dry_run:
+            ok("  would sync lib %-19s <- %s" % (src.name, show(src)))
+            written += 1
+            continue
+        if current is not None and current.strip():
+            backup(dst)
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if write_atomic(dst, body):
+            new_file = current is None
+            ok("  lib   %-28s <- %s%s" % (LIB + "/" + src.name, show(src),
+                                          "   (new: Import as Game Library)" if new_file else ""))
+            written += 1
+    return written
+
+
+def sync_all(index, opts: Options) -> int:
+    written = sync_libs(opts)
     for path in sorted(opts.save_dir.glob("*.py")):
         written += sync_file(path, index, opts, quiet_skips=not opts.verbose)
     tidy_unmatched(index, opts)

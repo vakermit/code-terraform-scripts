@@ -33,6 +33,8 @@
 #  turn rather than all staged at once.
 # =============================================================================
 
+from machines import find_machine
+
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
 REAGENT_BUFFER = 5     # spare units to keep beyond the recipe's need
 CREDIT_FLOOR = 200     # never spend below this on optional buffer stock
@@ -42,27 +44,6 @@ DEMAND_SLEEP = 5
 # Leave as "" to auto-detect, or paste the exact ids from the machine cards.
 COLLECTOR_ID = ""
 EXCHANGE_ID = ""
-
-
-def find_machine(kind, configured):
-    # Instance ids are numbered per save — bio_collector_1, bio_collector_2,
-    # ... — and a powered-down machine reads the same as a missing one.
-    if configured != "":
-        found = get_component(configured)
-        if found != None:
-            return found
-
-    found = get_component(kind)
-    if found != None:
-        return found
-
-    n = 1
-    while n <= 8:
-        found = get_component(kind + "_" + str(n))
-        if found != None:
-            return found
-        n = n + 1
-    return None
 
 
 collector = find_machine("bio_collector", COLLECTOR_ID)
