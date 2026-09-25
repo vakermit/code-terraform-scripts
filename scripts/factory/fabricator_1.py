@@ -117,11 +117,20 @@ def usable(recipe):
 # ------------------------------------------------------------------ plan ----
 
 def targets():
+    # Operator targets merged with what the Supply Dock still needs for its
+    # Earth Order (dock.needs), taking the larger figure per item.
+    wanted = {}
+    for item in TARGETS.keys():
+        wanted[item] = TARGETS[item]
     if comms != None:
-        published = comms.latest("factory.targets")
-        if published != None:
-            return published
-    return TARGETS
+        for channel in ["factory.targets", "dock.needs"]:
+            published = comms.latest(channel)
+            if published == None:
+                continue
+            for item in published.keys():
+                if published[item] > wanted.get(item, 0):
+                    wanted[item] = published[item]
+    return wanted
 
 
 def resolve(item, qty, depth, steps, needs, missing):
@@ -145,7 +154,7 @@ def resolve(item, qty, depth, steps, needs, missing):
     crafts = ceil(qty / recipe.output_count)
     for ingredient in recipe.inputs.keys():
         need = crafts * recipe.inputs[ingredient]
-        have = inventory.count(ingredient) + self.get_stockpile().get(ingredient, 0)
+        have = stock_of(ingredient) + self.get_stockpile().get(ingredient, 0)
         short = need - have
         if short > 0:
             resolve(ingredient, short, depth + 1, steps, needs, missing)
@@ -163,7 +172,7 @@ def plan():
     missing = {}
     wanted = targets()
     for item in wanted.keys():
-        short = wanted[item] - inventory.count(item)
+        short = wanted[item] - stock_of(item)
         if short > 0:
             resolve(item, short, 0, steps, needs, missing)
 
@@ -178,23 +187,102 @@ def craftable_now(recipe):
     # Every ingredient for ONE craft is in the store or already staged.
     for ingredient in recipe.inputs.keys():
         need = recipe.inputs[ingredient]
-        have = inventory.count(ingredient) + self.get_stockpile().get(ingredient, 0)
+        have = stock_of(ingredient) + self.get_stockpile().get(ingredient, 0)
         if have < need:
             return False
     return True
 
 
-# ----------------------------------------------------------------- ports ----
+# ---------------------------------------------------------------- stores ----
+# Two-directional routing. A port talks to ONE endpoint at a time, so the
+# endpoint is chosen per transfer:
+#   pull  -> Inventory first (keep it clean), then any bin holding the item
+#   push  -> a bin already latched to the item, then an empty bin, then
+#            Inventory as the last resort
+# Bins latch to the first material they receive, which is why an empty bin
+# is only claimed once every latched one is full.
 
-def connect_ports():
-    for port in [self.input, self.output, self.byproduct]:
-        if port.connected_id() != STORE:
-            result = port.connect(STORE)
-            if result.status != "ok":
-                print("[fab] connect:", result.message)
-                return False
+home = get_component("outpost_network").home()
+
+
+def bins():
+    out = []
+    for ref in home.buildings("storage_bin"):
+        entry = {}
+        entry["id"] = ref.id
+        entry["bin"] = get_component(ref.id)
+        out.append(entry)
+    return out
+
+
+def stock_of(item):
+    total = inventory.count(item)
+    for b in bins():
+        total = total + b["bin"].count(item)
+    return total
+
+
+def source_for(item):
+    if inventory.count(item) > 0:
+        return "inventory"
+    for b in bins():
+        if b["bin"].count(item) > 0:
+            return b["id"]
+    return ""
+
+
+def sink_for(item):
+    for b in bins():
+        if b["bin"].get_material() == item and b["bin"].space() > 0:
+            return b["id"]
+    for b in bins():
+        if b["bin"].is_empty():
+            return b["id"]
+    return STORE
+
+
+def aim(port, endpoint):
+    if port.connected_id() == endpoint:
+        return True
+    result = port.connect(endpoint)
+    if result.status != "ok":
+        print("[fab] connect", endpoint, ":", result.message)
+        return False
     return True
 
+
+def pull(port, item, count):
+    # Take up to `count`, switching sources as each one drains.
+    moved = 0
+    while moved < count:
+        src = source_for(item)
+        if src == "" or not aim(port, src):
+            break
+        result = port.take(item, count - moved)
+        if result.status != "ok" or result.moved == 0:
+            if result.status != "ok":
+                print("[fab] take", item, ":", result.message)
+            break
+        moved = moved + result.moved
+    return moved
+
+
+def push(port, stack):
+    # Send a whole stack, splitting across sinks as bins fill.
+    left = stack.count
+    while left > 0:
+        if not aim(port, sink_for(stack.id)):
+            break
+        result = port.send(stack.id, left, stack.properties, "exact")
+        if result.status != "ok" or result.moved == 0:
+            if result.status != "ok":
+                print("[fab] send", stack.id, ":", result.message)
+            break
+        left = left - result.moved
+    return stack.count - left
+
+
+# ----------------------------------------------------------------- ports ----
 
 def drain():
     # Output and byproduct both block recipe changes and, when full, block
@@ -202,9 +290,7 @@ def drain():
     ok = True
     for port in [self.output, self.byproduct]:
         for stack in port.stacks():
-            result = port.send(stack.id, stack.count, stack.properties, "exact")
-            if result.status != "ok":
-                print("[fab] drain", stack.id, ":", result.message)
+            if push(port, stack) < stack.count:
                 ok = False
     return ok
 
@@ -219,9 +305,9 @@ def make_room(recipe, units_needed):
     for item in pile.keys():
         if recipe.inputs.has(item):
             continue
-        result = self.input.eject(STORE, item, pile[item])
+        result = self.input.eject(sink_for(item), item, pile[item])
         if result.status == "ok":
-            print("[fab] returned", pile[item], "x", item, "to the store (not in recipe)")
+            print("[fab] returned", pile[item], "x", item, "to storage (not in recipe)")
         free = self.get_stockpile_capacity() - self.get_stockpile_used()
         if free >= units_needed:
             return True
@@ -246,9 +332,8 @@ def stage(recipe):
         short = recipe.inputs[ingredient] - pile.get(ingredient, 0)
         if short <= 0:
             continue
-        result = self.input.take(ingredient, short)
-        if result.status != "ok" or result.moved < short:
-            print("[fab] take", short, "x", ingredient, ":", result.message)
+        if pull(self.input, ingredient, short) < short:
+            print("[fab] could not stage", short, "x", ingredient)
             return False
     return True
 
@@ -286,11 +371,9 @@ def publish(needs, state, detail):
 
 last_report = ""
 
-while True:
-    if not connect_ports():
-        sleep(IDLE_SLEEP)
-        continue
+print("[fab]", len(bins()), "storage bins at", home.name)
 
+while True:
     drain()
 
     if self.is_running():

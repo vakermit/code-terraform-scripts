@@ -330,20 +330,48 @@ def mine_at(site):
 
 # --------------------------------------------------------------- unload ----
 
+def bins():
+    out = []
+    for ref in home.buildings("storage_bin"):
+        entry = {}
+        entry["id"] = ref.id
+        entry["bin"] = get_component(ref.id)
+        out.append(entry)
+    return out
+
+
+def sink_for(item):
+    # A bin already latched to this ore, then an empty bin, then Inventory.
+    # Bins latch to the first material they receive, so an empty bin is
+    # only claimed once every latched one is full.
+    for b in bins():
+        if b["bin"].get_material() == item and b["bin"].space() > 0:
+            return b["id"]
+    for b in bins():
+        if b["bin"].is_empty():
+            return b["id"]
+    return STORE
+
+
 def unload():
     if not can_unload:
         print("[rover] holding", self.cargo.count(), "units — unload by hand")
         return False
-    if self.output.connected_id() != STORE:
-        result = self.output.connect(STORE)
-        if result.status != "ok":
-            print("[rover] output connect:", result.message)
-            return False
     for stack in self.cargo.stacks():
-        result = self.output.send(stack.id, stack.count, stack.properties, "exact")
-        if result.status != "ok":
-            print("[rover] unload", stack.id, ":", result.message)
-            return False
+        left = stack.count
+        while left > 0:
+            target = sink_for(stack.id)
+            if self.output.connected_id() != target:
+                result = self.output.connect(target)
+                if result.status != "ok":
+                    print("[rover] output connect", target, ":", result.message)
+                    return False
+            result = self.output.send(stack.id, left, stack.properties, "exact")
+            if result.status != "ok" or result.moved == 0:
+                if result.status != "ok":
+                    print("[rover] unload", stack.id, ":", result.message)
+                return False
+            left = left - result.moved
         print("[rover] unloaded", stack.count, "x", stack.id)
     return True
 

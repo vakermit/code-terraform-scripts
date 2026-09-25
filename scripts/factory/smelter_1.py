@@ -22,7 +22,7 @@
 #  the Rover can go and mine it.
 # =============================================================================
 
-STORE = "inventory"
+STORE = "inventory"        # last-resort sink when no bin can take an item
 FLOORS = {}                # minimum stock per ingot, e.g. {"iron_ingot": 20}
 BATCH = 10                 # units to commit to before re-choosing
 IDLE_SLEEP = 2
@@ -57,7 +57,7 @@ def demand():
             for item in needs.keys():
                 wanted[item] = needs[item]
     for item in FLOORS.keys():
-        short = FLOORS[item] - inventory.count(item)
+        short = FLOORS[item] - stock_of(item)
         if short > wanted.get(item, 0):
             wanted[item] = short
     return wanted
@@ -89,7 +89,7 @@ def choose(wanted):
             continue
         crafts = ceil(units / recipe.output_count)
         ore_needed = crafts * ore["per_craft"]
-        ore_have = inventory.count(ore["item"]) + self.get_input_count()
+        ore_have = stock_of(ore["item"]) + self.get_input_count()
         if ore_have < ore["per_craft"]:
             ore_short[ore["item"]] = ore_short.get(ore["item"], 0) + ore_needed - ore_have
             continue
@@ -106,36 +106,109 @@ def choose(wanted):
     return result
 
 
-# ----------------------------------------------------------------- ports ----
+# ---------------------------------------------------------------- stores ----
+# Two-directional routing. A port talks to ONE endpoint at a time, so the
+# endpoint is chosen per transfer:
+#   pull  -> Inventory first (keep it clean), then any bin holding the item
+#   push  -> a bin already latched to the item, then an empty bin, then
+#            Inventory as the last resort
+# Bins latch to the first material they receive, which is why an empty bin
+# is only claimed once every latched one is full.
 
-def connect_ports():
-    for port in [self.input, self.output]:
-        if port.connected_id() != STORE:
-            result = port.connect(STORE)
-            if result.status != "ok":
-                print("[smelter] connect:", result.message)
-                return False
+home = get_component("outpost_network").home()
+
+
+def bins():
+    out = []
+    for ref in home.buildings("storage_bin"):
+        entry = {}
+        entry["id"] = ref.id
+        entry["bin"] = get_component(ref.id)
+        out.append(entry)
+    return out
+
+
+def stock_of(item):
+    total = inventory.count(item)
+    for b in bins():
+        total = total + b["bin"].count(item)
+    return total
+
+
+def source_for(item):
+    if inventory.count(item) > 0:
+        return "inventory"
+    for b in bins():
+        if b["bin"].count(item) > 0:
+            return b["id"]
+    return ""
+
+
+def sink_for(item):
+    for b in bins():
+        if b["bin"].get_material() == item and b["bin"].space() > 0:
+            return b["id"]
+    for b in bins():
+        if b["bin"].is_empty():
+            return b["id"]
+    return STORE
+
+
+def aim(port, endpoint):
+    if port.connected_id() == endpoint:
+        return True
+    result = port.connect(endpoint)
+    if result.status != "ok":
+        print("[smelter] connect", endpoint, ":", result.message)
+        return False
     return True
 
 
+def pull(port, item, count):
+    # Take up to `count`, switching sources as each one drains.
+    moved = 0
+    while moved < count:
+        src = source_for(item)
+        if src == "" or not aim(port, src):
+            break
+        result = port.take(item, count - moved)
+        if result.status != "ok" or result.moved == 0:
+            if result.status != "ok":
+                print("[smelter] take", item, ":", result.message)
+            break
+        moved = moved + result.moved
+    return moved
+
+
+def push(port, stack):
+    # Send a whole stack, splitting across sinks as bins fill.
+    left = stack.count
+    while left > 0:
+        if not aim(port, sink_for(stack.id)):
+            break
+        result = port.send(stack.id, left, stack.properties, "exact")
+        if result.status != "ok" or result.moved == 0:
+            if result.status != "ok":
+                print("[smelter] send", stack.id, ":", result.message)
+            break
+        left = left - result.moved
+    return stack.count - left
+
+
 def drain():
-    # Send finished ingots to the store. Returns units moved, so the batch
-    # loop counts what actually left rather than what was sitting there.
+    # Push finished ingots out. Returns units moved, so the batch loop
+    # counts what actually left rather than what was sitting there.
     moved = 0
     for stack in self.output.stacks():
-        result = self.output.send(stack.id, stack.count, stack.properties, "exact")
-        if result.status != "ok":
-            print("[smelter] drain", stack.id, ":", result.message)
-        else:
-            moved = moved + result.moved
+        moved = moved + push(self.output, stack)
     return moved
 
 
 def flush_input_to_store():
-    # Return leftover ore to the store so the recipe can change.
+    # Return leftover ore so the recipe can change.
     ok = True
     for stack in self.input.stacks():
-        result = self.input.eject(STORE, stack.id, stack.count)
+        result = self.input.eject(sink_for(stack.id), stack.id, stack.count)
         if result.status != "ok":
             print("[smelter] eject", stack.id, ":", result.message)
             ok = False
@@ -166,12 +239,10 @@ def feed(recipe, units_left):
     crafts_left = ceil(units_left / recipe.output_count)
     want_in = crafts_left * ore["per_craft"]
     room = self.input.capacity() - self.input.count()
-    pull = min(want_in - self.input.count(), room, inventory.count(ore["item"]))
-    if pull <= 0:
+    amount = min(want_in - self.input.count(), room, stock_of(ore["item"]))
+    if amount <= 0:
         return
-    result = self.input.take(ore["item"], pull)
-    if result.status != "ok":
-        print("[smelter] take", ore["item"], ":", result.message)
+    pull(self.input, ore["item"], amount)
 
 
 # ------------------------------------------------------------ publishing ----
@@ -191,12 +262,9 @@ def publish(ore_short, state, detail):
 # ------------------------------------------------------------------ loop ----
 
 last_note = ""
+print("[smelter]", len(bins()), "storage bins at", home.name)
 
 while True:
-    if not connect_ports():
-        sleep(IDLE_SLEEP)
-        continue
-
     drain()
 
     pick = choose(demand())
@@ -230,7 +298,7 @@ while True:
         sleep(POLL)
         made = made + drain()
         if self.get_input_count() == 0 and not self.is_running():
-            if inventory.count(ore_for(recipe)["item"]) == 0:
+            if stock_of(ore_for(recipe)["item"]) == 0:
                 print("[smelter] out of", ore_for(recipe)["item"], "after", made, "units")
                 break
 

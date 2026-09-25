@@ -149,20 +149,41 @@ def q(text):
 
 
 PATTERNS = {
-    # label:         regex whose group 1 is the literal's opening bracket
-    "components":    r"=(\[\{id:[^,]{1,8},nameKey:" + q("components.commander.name") + r")",
-    "types":         r"=(\[\{typeName:" + q("Component") + r",docsGroup:)",
-    "builtin_types": r"=(\[\{typeName:" + q("list") + r",docsGroup:)",
-    "globals":       r"=(\[\{name:" + q("boot") + r",signature:)",
-    "lang":          r"=(\[\{id:" + q("variables") + r",titleKey:)",
-    "builtins":      r"=(\[\{name:" + q("print") + r",signature:)",
-    "docs_pages":    r"=(\[\{id:" + q("getting_started") + r",categoryKey:)",
+    # label:         regex matching any ENTRY of the registry. The enclosing array is
+    #                found by walking back, so a build that reorders entries or inserts
+    #                a new one ahead of the anchor still resolves.
+    "components":    r"\{id:[^,]{1,8},nameKey:" + q("components.commander.name"),
+    "types":         r"\{typeName:" + q("Component") + r",docsGroup:",
+    "builtin_types": r"\{typeName:" + q("list") + r",docsGroup:",
+    "globals":       r"\{name:" + q("boot") + r",signature:",
+    "lang":          r"\{id:" + q("variables") + r",titleKey:",
+    "builtins":      r"\{name:" + q("print") + r",signature:",
+    "docs_pages":    r"\{id:" + q("getting_started") + r",categoryKey:",
 }
 OPTIONAL = {
     # Demo builds seed machine scripts from a table; retail replaced it with lessons.
-    "seed_scripts": r"=(\{[a-z0-9_]+:\{name:" + BT + r"[a-z0-9_]+\.py" + BT + r",source:)",
-    "lessons":      r"=(\[\{id:" + q("print-console") + r",title:)",
+    "seed_scripts": (r"[a-z0-9_]+:\{name:" + BT + r"[a-z0-9_]+\.py" + BT + r",source:", "{"),
+    "lessons":      r"\{id:" + q("print-console") + r",title:",
 }
+
+
+def enclosing_open(text, pos, opener="["):
+    """Walk back from `pos` to the unmatched `opener` that contains it.
+
+    Registries are found by matching one of their entries, because a build is free to
+    reorder entries or add a new one ahead of whichever we anchor on. Walking back to
+    the enclosing bracket makes the lookup independent of an entry's position.
+    """
+    depth = 0
+    for i in range(pos, -1, -1):
+        c = text[i]
+        if c in "]}":
+            depth += 1
+        elif c in "[{":
+            if depth == 0:
+                return i if c == opener else None
+            depth -= 1
+    return None
 
 
 class Chunk:
@@ -284,10 +305,20 @@ class Corpus:
             sys.exit("no JavaScript assets found")
 
     def registry(self, label, pattern, required=True):
+        """Find a registry by one of its entries, then parse the literal containing it."""
+        opener = "["
+        if isinstance(pattern, tuple):
+            pattern, opener = pattern
         for c in self.chunks:
             m = re.search(pattern, c.s)
-            if m:
-                return c, parse_at(c.s, m.start(1))[0]
+            if not m:
+                continue
+            # Start one char before the match: the anchor's own `{` is not the
+            # bracket we are looking for.
+            start = enclosing_open(c.s, m.start() - 1, opener)
+            if start is None:
+                continue
+            return c, parse_at(c.s, start)[0]
         if required:
             sys.exit("registry %r not found — the bundle's shape changed" % label)
         return None, None
