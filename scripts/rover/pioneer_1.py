@@ -27,6 +27,7 @@
 #  Inventory. Battery cost per meter is measured while driving.
 # =============================================================================
 
+from control import allows, mine_targets
 from demand import has_demand, ore_demand, weight_of
 from store import aim, bins, sink_for, source_for, stock_of
 from util import key_of
@@ -445,8 +446,14 @@ while True:
     # outstanding, mining it is the job and scouting is what we do when
     # nothing is minable. With nothing asked for, the reverse: go and find
     # sites now, so the next order starts with somewhere to dig.
-    wanted = ore_demand(WANTED_ITEMS)
-    mine_first = has_demand(wanted)
+    # The controller sees the whole base, so its ore priority wins when it
+    # is running. Falling back to the factory channels keeps the rover
+    # working exactly as before when no controller is publishing.
+    wanted = mine_targets()
+    if not has_demand(wanted):
+        wanted = ore_demand(WANTED_ITEMS)
+    mine_first = has_demand(wanted) and allows("mining")
+    may_explore = allows("exploration")
 
     if mine_first:
         site = best_site(wanted)
@@ -457,7 +464,7 @@ while True:
                 go_home()
             continue
 
-    contact = next_contact()
+    contact = next_contact() if may_explore else None
     if contact != None and can_afford_trip(contact.x, contact.y):
         idle_note = ""
         result = explore(contact)

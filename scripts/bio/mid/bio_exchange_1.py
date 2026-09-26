@@ -48,7 +48,7 @@
 #  Lab can at least chip at it as credits come in from elsewhere.
 # =============================================================================
 
-from power import wait_for_charge
+from power import wait_for_policy
 from store import ensure_ports
 STORE = "inventory"    # freight endpoint; at a remote outpost use a local bin
 IDLE_SLEEP = 0.5
@@ -364,7 +364,7 @@ while True:
     # Hold off starting work the grid cannot carry. Hysteretic: a job
     # already running continues down to PAUSE_PCT, a new one waits for
     # RESUME_PCT, so this does not flap around a single threshold.
-    wait_for_charge(self.id, "exchange")
+    wait_for_policy(self.id, "bio", "exchange")
 
     if not ensure_ports(self, STORE, "exchange"):
         sleep(IDLE_SLEEP)

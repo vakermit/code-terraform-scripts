@@ -40,7 +40,7 @@
 #    clock.real_seconds_per_hour().
 # ============================================================
 
-from power import wait_for_charge
+from power import wait_for_policy
 
 SCANNER_ID    = "scanner_1"
 ROWS          = 8      # A-H
@@ -282,7 +282,7 @@ while True:
     # Hold off starting work the grid cannot carry. Hysteretic: a job
     # already running continues down to PAUSE_PCT, a new one waits for
     # RESUME_PCT, so this does not flap around a single threshold.
-    wait_for_charge(self.id, "harvester")
+    wait_for_policy(self.id, "production", "harvester")
 
     pts = read_map()
     if len(pts) == 0:

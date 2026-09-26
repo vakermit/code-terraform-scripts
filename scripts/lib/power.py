@@ -19,6 +19,8 @@
 #  control path to get wrong. Waiting inside the script keeps one owner.
 # =============================================================================
 
+from control import allows, mode
+
 PAUSE_PCT = 25       # stop starting new work below this
 RESUME_PCT = 60      # ...and don't start again until back above this
 POLL_HOURS = 0.5     # world-clock hours between checks while waiting
@@ -149,6 +151,27 @@ def can_run(target_id, running, pause_pct=PAUSE_PCT, resume_pct=RESUME_PCT):
     if running:
         return s["pct"] > pause_pct
     return s["pct"] >= resume_pct
+
+
+def wait_for_policy(target_id, subsystem, tag="", pause_pct=PAUSE_PCT,
+                    resume_pct=RESUME_PCT, poll_hours=POLL_HOURS):
+    """Hold work back for a controller's policy, or for local charge.
+
+    When a controller is publishing, its ruling wins: it can see the whole
+    base and shed subsystems in priority order, which a single machine
+    cannot. With no controller, or a stale one, this falls through to the
+    local charge band, so every script behaves exactly as it did before the
+    controller existed.
+
+    Returns hours waited.
+    """
+    waited = 0
+    while not allows(subsystem):
+        if waited == 0:
+            print("[" + tag + "] " + mode() + ": holding " + subsystem)
+        sleep_hours(poll_hours)
+        waited = waited + poll_hours
+    return waited + wait_for_charge(target_id, tag, pause_pct, resume_pct, poll_hours)
 
 
 def wait_for_charge(target_id, tag="", pause_pct=PAUSE_PCT, resume_pct=RESUME_PCT,
