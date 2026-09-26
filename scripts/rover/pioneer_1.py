@@ -27,7 +27,7 @@
 #  Inventory. Battery cost per meter is measured while driving.
 # =============================================================================
 
-from signals import wanted_ores
+from demand import has_demand, ore_demand, weight_of
 from store import aim, bins, sink_for, source_for, stock_of
 from util import key_of
 
@@ -350,10 +350,16 @@ def explore(p):
 
 # ----------------------------------------------------------------- mine ----
 
-def best_site():
+def best_site(wanted):
+    # Highest-value mineable site in reach, given what the base is short of.
+    #
+    # Score is purity over distance, tilted by demand. weight_of() grows with
+    # the units outstanding and is capped, so a large shortfall outranks a
+    # token one without letting demand override distance entirely. An ore
+    # nobody asked for is deprioritised (0.35) but never excluded, so the
+    # rover keeps working when the factory is quiet.
     if not has_drill:
         return None
-    wanted = wanted_ores(WANTED_ITEMS)
     best = None
     best_score = 0
     for site in journal.surveyed_sites(PLANET_ID):
@@ -365,11 +371,7 @@ def best_site():
             continue
         d = self.nav.get_distance_to(site.x, site.y)
         score = PURITY_VALUE.get(site.purity, 1) / (1 + d / 100)
-        if len(wanted) > 0:
-            if wanted.has(site.item_id):
-                score = score * 10
-            else:
-                score = score * 0.1
+        score = score * weight_of(wanted, site.item_id)
         if best == None or score > best_score:
             best = site
             best_score = score
@@ -439,6 +441,22 @@ while True:
             sleep(10)
         continue
 
+    # Demand decides the order of the next two blocks. With an order
+    # outstanding, mining it is the job and scouting is what we do when
+    # nothing is minable. With nothing asked for, the reverse: go and find
+    # sites now, so the next order starts with somewhere to dig.
+    wanted = ore_demand(WANTED_ITEMS)
+    mine_first = has_demand(wanted)
+
+    if mine_first:
+        site = best_site(wanted)
+        if site != None:
+            idle_note = ""
+            result = mine_at(site)
+            if result == "low_battery" or result == "stuck":
+                go_home()
+            continue
+
     contact = next_contact()
     if contact != None and can_afford_trip(contact.x, contact.y):
         idle_note = ""
@@ -447,13 +465,14 @@ while True:
             go_home()
         continue
 
-    site = best_site()
-    if site != None:
-        idle_note = ""
-        result = mine_at(site)
-        if result == "low_battery" or result == "stuck":
-            go_home()
-        continue
+    if not mine_first:
+        site = best_site(wanted)
+        if site != None:
+            idle_note = ""
+            result = mine_at(site)
+            if result == "low_battery" or result == "stuck":
+                go_home()
+            continue
 
     if not at_home():
         go_home()
