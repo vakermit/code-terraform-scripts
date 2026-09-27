@@ -27,8 +27,9 @@
 #  Inventory. Battery cost per meter is measured while driving.
 # =============================================================================
 
-from control import allows, mine_targets
+from control import allows, mine_targets, role_of
 from demand import has_demand, ore_demand, weight_of
+from scout import best_hub, best_outposts
 from store import aim, bins, sink_for, source_for, stock_of
 from util import key_of
 
@@ -102,6 +103,27 @@ print("[pioneer] pool", self.battery.capacity(), "Wh; cargo", self.cargo.capacit
 hardness_limit = 0
 if has_drill:
     hardness_limit = self.drill.hardness_limit()
+
+# Roles are assigned by the controller; capability is our own business. A role
+# this rover cannot serve falls back to auto rather than idling: being told to
+# scout without sonar should not stop it mining.
+SCOUT_RADIUS = 150         # m: sites this close would share one outpost's pipes
+SCOUT_MAX_RANGE = 1200     # m from home: beyond this a trip is doubtful
+SCOUT_BIOME = ""           # "" = any biome that is not home
+
+
+def my_role():
+    wanted = role_of(self.id)
+    if wanted == "scout" and not has_sonar:
+        return "auto"
+    if wanted == "mine" and not has_drill:
+        return "auto"
+    if wanted == "build" and not has_constructor:
+        return "auto"
+    return wanted
+
+
+home_biome = nocturna.biome_at(home_x, home_y)
 
 skipped = []
 
@@ -301,19 +323,57 @@ def build(job):
 
 # -------------------------------------------------------------- explore ----
 
-def next_contact():
-    if not has_sonar:
-        return None
-    best = None
-    best_d = 0
+def open_contacts():
+    out = []
     for p in nocturna.points_of_interest():
         if p.scanned or key_of(p.x, p.y) in skipped:
             continue
+        out.append(p)
+    return out
+
+
+def next_contact():
+    # Nearest-first surveys a ring around home and never leaves the home
+    # biome. Scouting instead ranks whole sonar sweeps by what they contain,
+    # so a cluster of new-biome contacts outranks one more nearby dot.
+    if not has_sonar:
+        return None
+    contacts = open_contacts()
+    if len(contacts) == 0:
+        return None
+    if my_role() == "scout":
+        hub = best_hub(contacts, self.sonar.range() * 0.85, self.nav, nocturna,
+                       home_biome, SCOUT_BIOME, can_afford_trip)
+        if hub != None:
+            return hub["members"][0]
+    best = None
+    best_d = 0
+    for p in contacts:
         d = self.nav.get_distance_to(p.x, p.y)
         if best == None or d < best_d:
             best = p
             best_d = d
     return best
+
+
+def report_outposts():
+    # Cluster everything surveyed so far and pin the best candidates. Sites
+    # within pipe range share one outpost, so the cluster is the unit of
+    # value, not the site.
+    surveyed = journal.surveyed_sites(PLANET_ID)
+    if len(surveyed) == 0:
+        return
+    spots = best_outposts(surveyed, SCOUT_RADIUS, self.nav, nocturna,
+                          home_biome, SCOUT_BIOME, SCOUT_MAX_RANGE, 3)
+    if len(spots) == 0:
+        return
+    n = 1
+    for spot in spots:
+        print("[pioneer] outpost candidate", n, "score", round(spot["score"], 1),
+              "at", int(spot["x"]), int(spot["y"]),
+              "-", len(spot["members"]), "sites")
+        n = n + 1
+    publish("scouted", str(int(spots[0]["x"])) + "," + str(int(spots[0]["y"])))
 
 
 def explore(p):
@@ -452,8 +512,15 @@ while True:
     wanted = mine_targets()
     if not has_demand(wanted):
         wanted = ore_demand(WANTED_ITEMS)
-    mine_first = has_demand(wanted) and allows("mining")
-    may_explore = allows("exploration")
+
+    # A scout never mines, however loud the demand: that is the point of
+    # assigning the role. Otherwise demand decides, as before.
+    role = my_role()
+    may_explore = allows("exploration") or role == "scout"
+    if role == "scout":
+        mine_first = False
+    else:
+        mine_first = has_demand(wanted) and allows("mining")
 
     if mine_first:
         site = best_site(wanted)
@@ -485,6 +552,8 @@ while True:
         go_home()
         continue
 
+    if role == "scout":
+        report_outposts()
     if idle_note != "idle":
         print("[pioneer] no jobs, contacts, or mineable sites in reach — idle at home")
         idle_note = "idle"

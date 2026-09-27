@@ -93,7 +93,24 @@ def mine_targets():
     return p["mine"]
 
 
-def publish(comms, mode_name, power_pct, allow, mine):
+def role_of(machine_id, default="auto"):
+    """The job the controller wants this machine doing.
+
+    Roles are assignments, not capabilities. A rover decides for itself
+    whether its mounts can serve the role it was given; the controller only
+    says what it would like. "auto" means the machine chooses, which is what
+    it did before roles existed.
+    """
+    p = policy()
+    if p == None or not p.has("roles"):
+        return default
+    roles = p["roles"]
+    if not roles.has(machine_id):
+        return default
+    return roles[machine_id]
+
+
+def publish(comms, mode_name, power_pct, allow, mine, roles=None):
     """Write a policy to the bus. Only the controller should call this.
 
     Passing comms in rather than resolving it keeps the caller honest about
@@ -106,6 +123,7 @@ def publish(comms, mode_name, power_pct, allow, mine):
     body["power_pct"] = int(power_pct)
     body["allow"] = allow
     body["mine"] = mine
+    body["roles"] = roles if roles != None else {}
     body["hour"] = now_hour()
     comms.broadcast(CHANNEL, body)
     return True

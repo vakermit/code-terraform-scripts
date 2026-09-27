@@ -38,8 +38,20 @@ network = get_component("outpost_network")
 home = network.home() if network != None else None
 
 PUBLISH_EVERY = 0.25         # world-clock hours between policy writes
-ROW = 22
+ROW = 20             # a 500x200 card fits ten rows; four go to subsystems
 MODES = ["AUTO", "normal", "conserve", "emergency"]
+
+# Role assignments, machine id -> role. Capability is the machine's own
+# business: a rover told to scout without sonar falls back to auto rather
+# than idling, so an over-broad assignment here is harmless.
+#
+# To make a second pioneer the scout, fit it with sonar and add:
+#     "pioneer_2": "scout"
+# A miner and a scout want different targets, which is why this split needs
+# no claim protocol: they never contend for the same site.
+ROLES = {
+    "pioneer_1": "auto",
+}
 
 last_hour = -99
 last_mode = ""
@@ -60,12 +72,14 @@ def dot_for(mode_name):
     return "good"
 
 
-def subsystem_rows(allow, y):
+def subsystem_rows(allow, y, w):
+    # One row each, right-aligned pill. Stays inside a 500px column.
     for name in SUBSYSTEMS:
         on = allow.get(name, True)
-        panel.status_dot(12, y, 5, "good" if on else "idle")
-        panel.draw_text(28, y, name)
-        panel.pill(panel.width() - 70, y, "RUN" if on else "HOLD")
+        panel.status_dot(14, y, 4, "good" if on else "idle")
+        panel.draw_text(28, y - 4, name, 12)
+        panel.pill(w - 66, y - 6, "RUN" if on else "HOLD",
+                   "success" if on else "text-muted", 11)
         y = y + ROW
     return y
 
@@ -74,7 +88,7 @@ while True:
     panel.clear()
     w = panel.width()
 
-    choice = panel.radio_group("mode", 12, 8, MODES, "AUTO")
+    choice = panel.combo("mode", 12, 8, 132, MODES, "AUTO", "mode")
     manual = choice != None and choice != "AUTO"
 
     s = state(grid_anchor())
@@ -101,27 +115,50 @@ while True:
     if clock != None:
         hour = clock.get_day() * 24 + clock.get_time()[0]
     if plan["mode"] != last_mode or hour - last_hour >= PUBLISH_EVERY:
-        if publish(comms, plan["mode"], pct, plan["allow"], mine):
+        if publish(comms, plan["mode"], pct, plan["allow"], mine, ROLES):
             last_mode = plan["mode"]
             last_hour = hour
 
     # ---- draw ---------------------------------------------------------------
-    panel.card(8, 34, w - 16, 52, "GRID")
-    panel.status_dot(20, 52, 5, dot_for(plan["mode"]))
-    panel.draw_text(36, 52, plan["mode"].upper() + ("  (manual)" if manual else ""))
-    panel.progress_bar(20, 70, w - 40, 12, pct / 100.0)
-    panel.draw_text(20, 96, report(grid_anchor()))
+    # Laid out for the 500x200 single card; a 2x2 just gets more slack. The
+    # combo costs one row where a radio_group cost four, which is what made
+    # the first version overlap itself.
+    h = panel.height()
 
-    y = subsystem_rows(plan["allow"], 122)
+    panel.status_dot(w - 22, 18, 5, dot_for(plan["mode"]))
+    label = plan["mode"].upper()
+    if manual:
+        label = label + " (manual)"
+    panel.draw_text(156, 14, label, 13, "text-bright")
 
-    if len(mine) > 0:
-        panel.divider(12, y + 4, w - 12, y + 4)
-        panel.draw_text(12, y + 16, "mining priority")
-        row = y + 16 + ROW
-        for ore in mine.keys():
-            panel.draw_text(28, row, ore + "  x" + str(int(mine[ore])))
-            row = row + ROW
+    panel.progress_bar(12, 44, w - 24, 10, pct / 100.0)
+    panel.draw_text(12, 60, report(grid_anchor()), 11, "text-secondary")
+
+    panel.divider(12, 78, w - 12, 78)
+    y = subsystem_rows(plan["allow"], 94, w)
+
+    # Only a taller card has room for the ore list; the small one gets a count.
+    if h >= 400:
+        panel.divider(12, y + 2, w - 12, y + 2)
+        if len(mine) > 0:
+            panel.draw_text(12, y + 16, "mining priority", 12, "text-secondary")
+            row = y + 16 + ROW
+            for ore in mine.keys():
+                panel.draw_text(28, row, ore + "  x" + str(int(mine[ore])), 12)
+                row = row + ROW
+        else:
+            panel.draw_text(12, y + 16, "no ore demand - rover scouts", 12,
+                            "text-muted")
     else:
-        panel.draw_text(12, y + 16, "no ore demand - rover scouts")
+        note = "scouting"
+        if len(mine) > 0:
+            note = str(len(mine)) + " ore wanted"
+        roles = []
+        for rid in ROLES.keys():
+            if ROLES[rid] != "auto":
+                roles.append(rid + ":" + ROLES[rid])
+        if len(roles) > 0:
+            note = note + "  |  " + ", ".join(roles)
+        panel.draw_text(12, y + 2, note, 11, "text-muted")
 
     sleep(1)
