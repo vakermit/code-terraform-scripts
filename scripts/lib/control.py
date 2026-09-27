@@ -30,7 +30,7 @@ from signals import latest
 
 CHANNEL = "control.policy"
 STALE_HOURS = 6
-SUBSYSTEMS = ["production", "bio", "mining", "exploration"]
+SUBSYSTEMS = ["production", "bio", "mining", "exploration", "construction"]
 
 
 def now_hour():
@@ -133,10 +133,15 @@ def decide(power_pct, thresholds=None):
     """Map grid charge to a mode and per-subsystem permissions.
 
     Subsystems are shed in increasing order of how much the base needs them.
-    Exploration is pure investment and goes first. Bio is a credit engine that
-    can wait. Production is the order pipeline and goes last of the
-    discretionary work. Mining survives into conserve because an empty ore
-    store stalls everything once power returns.
+    Exploration and construction are investment in a future the base may not
+    reach on a bad night, so they go first. Bio is a credit engine that can
+    wait. Production is the order pipeline and goes last of the discretionary
+    work. Mining survives into conserve because an empty ore store stalls
+    everything once power returns.
+
+    Construction is shed with exploration rather than later because a paused
+    build banks its progress: stopping costs nothing but time, where an
+    interrupted smelt wastes the input.
 
     Atmosphere and sensors are never listed: they are life support and this
     never touches them.
@@ -154,6 +159,7 @@ def decide(power_pct, thresholds=None):
         allow["mining"] = True
         allow["bio"] = False
         allow["exploration"] = False
+        allow["construction"] = False
     else:
         name = "normal"
         for s in SUBSYSTEMS:

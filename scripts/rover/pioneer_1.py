@@ -465,6 +465,12 @@ idle_note = ""
 while True:
     learn_cost()
 
+    # Role and permissions are resolved once per pass, before any phase reads
+    # them, so a policy change mid-loop cannot half-apply.
+    role = my_role()
+    may_build = allows("construction") or role == "build"
+    may_explore = allows("exploration") or role == "scout"
+
     if self.is_being_rescued():
         publish("rescued", self.rescue_status())
         sleep(5)
@@ -490,7 +496,9 @@ while True:
         go_home()
         continue
 
-    job = next_job()
+    # Build is first: a paused construction has banked progress, and leaving
+    # it half-done blocks whatever needed that structure.
+    job = next_job() if may_build else None
     if job != None:
         idle_note = ""
         result = build(job)
@@ -513,11 +521,9 @@ while True:
     if not has_demand(wanted):
         wanted = ore_demand(WANTED_ITEMS)
 
-    # A scout never mines, however loud the demand: that is the point of
-    # assigning the role. Otherwise demand decides, as before.
-    role = my_role()
-    may_explore = allows("exploration") or role == "scout"
-    if role == "scout":
+    # An assigned role never mines outside its job, however loud the demand:
+    # that is the point of assigning it. On auto, demand decides as before.
+    if role == "scout" or role == "build":
         mine_first = False
     else:
         mine_first = has_demand(wanted) and allows("mining")

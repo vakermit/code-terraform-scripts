@@ -50,7 +50,7 @@ MODES = ["AUTO", "normal", "conserve", "emergency"]
 # A miner and a scout want different targets, which is why this split needs
 # no claim protocol: they never contend for the same site.
 ROLES = {
-    "pioneer_1": "auto",
+    "pioneer_1": "auto",       # "auto" | "mine" | "scout" | "build"
 }
 
 last_hour = -99
