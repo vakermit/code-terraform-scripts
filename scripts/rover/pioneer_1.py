@@ -27,7 +27,7 @@
 #  Inventory. Battery cost per meter is measured while driving.
 # =============================================================================
 
-from control import allows, mine_targets, role_of
+from control import allows, mine_targets, mode, role_of
 from demand import has_demand, ore_demand, weight_of
 from scout import best_hub, best_outposts
 from store import aim, bins, sink_for, source_for, stock_of
@@ -468,8 +468,12 @@ while True:
     # Role and permissions are resolved once per pass, before any phase reads
     # them, so a policy change mid-loop cannot half-apply.
     role = my_role()
-    may_build = allows("construction") or role == "build"
-    may_explore = allows("exploration") or role == "scout"
+    # An assigned role is a standing instruction, so it survives conserve: the
+    # blueprint and the survey are work the base already committed to. Only
+    # emergency overrides that, when nothing discretionary may move at all.
+    emergency = mode() == "emergency"
+    may_build = (allows("construction") or role == "build") and not emergency
+    may_explore = (allows("exploration") or role == "scout") and not emergency
 
     if self.is_being_rescued():
         publish("rescued", self.rescue_status())

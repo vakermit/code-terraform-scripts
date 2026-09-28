@@ -143,6 +143,13 @@ def decide(power_pct, thresholds=None):
     build banks its progress: stopping costs nothing but time, where an
     interrupted smelt wastes the input.
 
+    That reasoning only covers a build already under way. Shedding the
+    subsystem also stops one STARTING, which at 50-odd percent overnight
+    means an assigned builder never departs at all. A rover holding the
+    build role is exempt in conserve for exactly that reason -- see
+    pioneer's may_build -- because the blueprint is work the base already
+    committed to, not opportunistic work it can skip.
+
     Atmosphere and sensors are never listed: they are life support and this
     never touches them.
     """
