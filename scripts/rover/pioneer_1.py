@@ -39,7 +39,11 @@ STORE = "inventory"
 
 CRUISE = 0.6               # short hops: arrive sooner, fixed draw is brief
 CRUISE_LONG = 0.35         # long runs: the game trades speed for range per meter
-LONG_TRIP_M = 250          # beyond this, range matters more than arrival time
+LONG_TRIP_M = 250          # at or beyond this, range matters more than arrival
+                           # time. Inclusive on purpose: the outpost blueprint
+                           # sits at exactly 250 m, and a trip landing on the
+                           # boundary should take the economical throttle
+                           # rather than flip on a rounding wobble.
 ARRIVE_M = 2
 RESERVE_FRACTION = 0.12    # reserve scales with the pool: 12% of capacity, 10 Wh minimum
 LEVEL_FLOOR = 0.15
@@ -262,7 +266,7 @@ def cruise_for(x, y):
     # while it crawls, so an ever-lower throttle eventually costs more, not
     # less. CRUISE_LONG is a compromise, and learn_cost() measures the real
     # result rather than trusting this comment.
-    if self.nav.get_distance_to(x, y) > LONG_TRIP_M:
+    if self.nav.get_distance_to(x, y) >= LONG_TRIP_M:
         return CRUISE_LONG
     return CRUISE
 
