@@ -80,6 +80,58 @@ if station_pos != None:
 else:
     print("[pioneer] no charging station at home — the pool will not refill")
 
+# Staging base: the nearest outpost that can actually put charge back in.
+#
+# Home is where the kit and the Inventory live, so loading and unloading stay
+# tied to home. Range is a different question: what limits a trip is the walk
+# back to a charger, and once a field outpost has a powered station that walk
+# is much shorter. Budgeting against the nearest live charger rather than home
+# is what makes a far site reachable in two hops.
+#
+# "Powered" is the whole test. A station on a dark subnet is scenery, and
+# treating it as a refuge is how a rover strands itself.
+BASE_EVERY = 30            # ticks between re-picks; the answer rarely changes
+home_anchor = [home_x, home_y]
+base = {"x": home_x, "y": home_y, "id": home.id, "ticks": 0}
+
+
+def find_base():
+    """Nearest outpost with a powered charging station, or None."""
+    best = None
+    best_d = 0
+    for out in network.outposts():
+        for b in out.buildings("charging_station"):
+            if not b.powered:
+                continue
+            pos = b.position
+            d = self.nav.get_distance_to(pos[0], pos[1])
+            if best == None or d < best_d:
+                best = {"x": pos[0], "y": pos[1], "id": out.id}
+                best_d = d
+            break
+    return best
+
+
+def refresh_base(force=False):
+    """Re-pick the staging base. Nearest-powered needs no stickiness.
+
+    The answer only changes when a closer station comes online or the current
+    one goes dark, and switching is right in both cases. With no live station
+    anywhere, fall back to home, whose grid is the likeliest to return.
+    """
+    base["ticks"] = base["ticks"] - 1
+    if not force and base["ticks"] > 0:
+        return
+    base["ticks"] = BASE_EVERY
+    found = find_base()
+    if found == None:
+        found = {"x": home_anchor[0], "y": home_anchor[1], "id": home.id}
+    if found["id"] != base["id"]:
+        print("[pioneer] staging from", found["id"])
+    base["x"] = found["x"]
+    base["y"] = found["y"]
+    base["id"] = found["id"]
+
 can_transfer = research.is_unlocked("research_auto_feeders")
 if not can_transfer:
     print("[pioneer] Auto Feeders is not researched — cargo cannot be loaded or unloaded by script")
@@ -245,17 +297,21 @@ def wh_to_reach(x, y):
 def can_afford_to_be_here():
     if self.battery.level() < LEVEL_FLOOR:
         return False
-    return self.battery.wh() > wh_to_reach(home_x, home_y) + RESERVE_WH
+    return self.battery.wh() > wh_to_reach(base["x"], base["y"]) + RESERVE_WH
 
 
 def can_afford_trip(x, y):
     there = wh_to_reach(x, y)
-    back = distance(x, y, home_x, home_y) * cost["wh_per_m"] * SAFETY
+    back = distance(x, y, base["x"], base["y"]) * cost["wh_per_m"] * SAFETY
     return self.battery.wh() > there + back + RESERVE_WH
 
 
 def at_home():
     return self.nav.get_distance_to(home_x, home_y) <= ARRIVE_M
+
+
+def at_base():
+    return self.nav.get_distance_to(base["x"], base["y"]) <= ARRIVE_M
 
 
 # ---------------------------------------------------------------- drive ----
@@ -300,6 +356,30 @@ def go_home():
     result = drive_to(home_x, home_y, True)
     if result != "ok":
         print("[pioneer] return home:", result)
+    return result
+
+
+def home_run():
+    """Go to home specifically, but only with the charge to get there.
+
+    Inventory lives at home, so loading a kit and dumping cargo are trips to
+    home and nowhere else. Once the staging base is a field outpost that trip
+    stops being free: standing at the outpost satisfies can_afford_to_be_here,
+    so without this check the rover would set off for home on a pool that
+    cannot reach it. Waiting costs a charge cycle; guessing costs the rover.
+    """
+    if at_base() and not can_afford_trip(home_x, home_y):
+        print("[pioneer] holding at", base["id"], "- not enough charge for the home run")
+        return "low_battery"
+    return go_home()
+
+
+def go_base():
+    """Head for the nearest live charger, which may not be home."""
+    publish("returning", base["id"])
+    result = drive_to(base["x"], base["y"], True)
+    if result != "ok":
+        print("[pioneer] return to", base["id"], ":", result)
     return result
 
 
@@ -521,6 +601,7 @@ idle_note = ""
 
 while True:
     learn_cost()
+    refresh_base()
 
     # Role and permissions are resolved once per pass, before any phase reads
     # them, so a policy change mid-loop cannot half-apply.
@@ -542,7 +623,7 @@ while True:
     # item every cycle.
     if self.cargo.full() or (self.cargo.count() > 0 and at_home()):
         if not at_home():
-            go_home()
+            home_run()
             continue
         # Dumping a kit the next build needs wastes the whole round trip: the
         # rover unloads it, recharges, reloads the same kit and sets off again.
@@ -552,13 +633,13 @@ while True:
             sleep(30)
             continue
 
-    if at_home() and self.battery.level() < CHARGE_TO:
+    if at_base() and self.battery.level() < CHARGE_TO:
         publish("charging", str(round(self.battery.level(), 2)))
         sleep(5)
         continue
 
-    if not at_home() and not can_afford_to_be_here():
-        go_home()
+    if not at_base() and not can_afford_to_be_here():
+        go_base()
         continue
 
     # Build is first: a paused construction has banked progress, and leaving
@@ -568,9 +649,9 @@ while True:
         idle_note = ""
         result = build(job)
         if result == "need_kit":
-            go_home()
+            home_run()
         elif result == "low_battery" or result == "stuck":
-            go_home()
+            go_base()
         elif result == "no_kit" or result == "execute_failed":
             sleep(10)
         continue
@@ -599,7 +680,7 @@ while True:
             idle_note = ""
             result = mine_at(site)
             if result == "low_battery" or result == "stuck":
-                go_home()
+                go_base()
             continue
 
     contact = next_contact() if may_explore else None
@@ -607,7 +688,7 @@ while True:
         idle_note = ""
         result = explore(contact)
         if result == "low_battery" or result == "stuck":
-            go_home()
+            go_base()
         continue
 
     if not mine_first:
@@ -616,11 +697,11 @@ while True:
             idle_note = ""
             result = mine_at(site)
             if result == "low_battery" or result == "stuck":
-                go_home()
+                go_base()
             continue
 
-    if not at_home():
-        go_home()
+    if not at_base():
+        go_base()
         continue
 
     if role == "scout":
