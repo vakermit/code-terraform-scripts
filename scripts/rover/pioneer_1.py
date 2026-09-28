@@ -30,13 +30,16 @@
 from control import allows, mine_targets, mode, role_of
 from demand import has_demand, ore_demand, weight_of
 from scout import best_hub, best_outposts
+from signals import latest
 from store import aim, bins, sink_for, source_for, stock_of
 from util import key_of
 
 PLANET_ID = "nocturna"
 STORE = "inventory"
 
-CRUISE = 0.6
+CRUISE = 0.6               # short hops: arrive sooner, fixed draw is brief
+CRUISE_LONG = 0.35         # long runs: the game trades speed for range per meter
+LONG_TRIP_M = 250          # beyond this, range matters more than arrival time
 ARRIVE_M = 2
 RESERVE_FRACTION = 0.12    # reserve scales with the pool: 12% of capacity, 10 Wh minimum
 LEVEL_FLOOR = 0.15
@@ -157,11 +160,25 @@ def load(item, count):
     return moved
 
 
-def unload():
+def needed_kits():
+    # Item ids that some pending construction is waiting on.
+    keep = []
+    if not has_constructor:
+        return keep
+    for job in blueprint.pending_constructions():
+        if job.required_item != None and job.required_count > 0:
+            if job.required_item not in keep:
+                keep.append(job.required_item)
+    return keep
+
+
+def unload(keep=None):
     if not can_transfer:
         print("[pioneer] holding", self.cargo.count(), "units — unload by hand")
         return False
     for stack in self.cargo.stacks():
+        if keep != None and stack.id in keep:
+            continue
         left = stack.count
         while left > 0:
             if not aim(self.output, sink_for(stack.id), "pioneer"):
@@ -179,9 +196,21 @@ def unload():
 # -------------------------------------------------------------- battery ----
 
 cost = {}
+# Seed from what this vehicle learned last run. Starting at the optimistic
+# guess every restart is why it kept committing to a trip it could not finish:
+# can_afford_trip() passed on 0.05, the real figure was measured on the way
+# out, and can_afford_to_be_here() then turned it around. Remembering the
+# measurement means the next attempt is refused before the kit is loaded.
+COST_CHANNEL = "fleet.cost." + self.id
+
 cost["wh_per_m"] = WH_PER_M_GUESS
+learned = latest(COST_CHANNEL)
+if learned != None and learned > 0:
+    cost["wh_per_m"] = learned
+    print("[pioneer] recalled drive cost", round(learned, 4), "Wh/m")
 cost["last_wh"] = self.battery.wh()
 cost["last_pos"] = self.nav.get_position()
+cost["published"] = cost["wh_per_m"]
 
 
 def learn_cost():
@@ -193,6 +222,10 @@ def learn_cost():
         cost["wh_per_m"] = cost["wh_per_m"] * 0.8 + (spent / moved) * 0.2
     cost["last_wh"] = self.battery.wh()
     cost["last_pos"] = pos
+    # Publish only on a real change, so a restart inherits a measured figure.
+    if comms != None and abs(cost["wh_per_m"] - cost["published"]) > 0.005:
+        comms.broadcast(COST_CHANNEL, cost["wh_per_m"])
+        cost["published"] = cost["wh_per_m"]
 
 
 def distance(x1, y1, x2, y2):
@@ -223,9 +256,20 @@ def at_home():
 
 # ---------------------------------------------------------------- drive ----
 
+def cruise_for(x, y):
+    # Throttle trades speed for battery per meter, so a long run is cheaper
+    # slower. Not monotonic though: the vehicle's fixed draw keeps running
+    # while it crawls, so an ever-lower throttle eventually costs more, not
+    # less. CRUISE_LONG is a compromise, and learn_cost() measures the real
+    # result rather than trusting this comment.
+    if self.nav.get_distance_to(x, y) > LONG_TRIP_M:
+        return CRUISE_LONG
+    return CRUISE
+
+
 def drive_to(x, y, heading_home):
     self.nav.set_target(x, y)
-    self.nav.set_throttle(CRUISE)
+    self.nav.set_throttle(cruise_for(x, y))
     still = 0
     while self.nav.get_distance_to(x, y) > ARRIVE_M:
         sleep(TICK)
@@ -489,13 +533,17 @@ while True:
         sleep(5)
         continue
 
-    # Bring cargo home. Build kits ride along; unload() returns them to
-    # storage, and build() reloads only what its job needs.
+    # Bring cargo home. A kit a pending build still wants stays aboard, so an
+    # aborted run does not end with the rover dumping and reloading the same
+    # item every cycle.
     if self.cargo.full() or (self.cargo.count() > 0 and at_home()):
         if not at_home():
             go_home()
             continue
-        unload()
+        # Dumping a kit the next build needs wastes the whole round trip: the
+        # rover unloads it, recharges, reloads the same kit and sets off again.
+        # Hold anything a pending construction is waiting for.
+        unload(keep=needed_kits())
         if self.cargo.count() > 0:
             sleep(30)
             continue
