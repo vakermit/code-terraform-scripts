@@ -285,6 +285,15 @@ def next_job():
         if job.required_item != None and job.required_count > 0:
             have = stock_of(job.required_item) + cargo_count(job.required_item)
             if have < job.required_count:
+                # Skipping silently here is why a planned build looks like the
+                # rover ignoring it and wandering off: the job never enters the
+                # running, so nothing ever reports a reason. Say it once.
+                note = "kit:" + job.required_item
+                if note not in skipped:
+                    skipped.append(note)
+                    print("[pioneer] cannot build", job.kind, "- need",
+                          job.required_count, "x", job.required_item,
+                          "- have", have)
                 continue
         if not can_afford_trip(job.position.x, job.position.y):
             continue
