@@ -2,6 +2,9 @@
 
     python tools/build_docs.py "E:/SteamLibrary/steamapps/common/CodeTerraform" docs
 
+Add --check to compare the docs folder against the game binary and exit without
+extracting: 0 when the docs are current, 1 when a re-extract is due.
+
 Everything the game ships lives inside the single Tauri executable as brotli-compressed
 embedded assets. This script locates that asset table in the PE, decompresses it, then
 reconstructs the documentation from the frontend JavaScript, which holds the same API
@@ -62,6 +65,40 @@ def fingerprint(exe_path, game_dir):
                             .replace(microsecond=0).isoformat(),
         "release": release,
     }
+
+
+def report_freshness(args, source, previous, unchanged):
+    """Print whether out_dir matches the game binary. Returns an exit code."""
+    def line(k, v):
+        print("  %-16s %s" % (k, v))
+
+    if unchanged:
+        print("docs are CURRENT")
+        line("built from", source["sha256"][:12])
+        line("extracted", previous.get("extracted_at", "?"))
+        return 0
+
+    if not previous:
+        print("docs have NEVER been extracted to %s" % args.out_dir)
+        line("game binary", source["sha256"][:12])
+        line("modified", source["modified"])
+    else:
+        print("docs are STALE")
+        was = previous.get("game", {})
+        line("built from", "%s  (extracted %s)" % (
+            (was.get("sha256") or "?")[:12], previous.get("extracted_at", "?")))
+        line("binary now", "%s  (modified %s)" % (
+            source["sha256"][:12], source["modified"]))
+        if was.get("size_bytes") and was["size_bytes"] != source["size_bytes"]:
+            line("size", "{:,} -> {:,} bytes".format(
+                was["size_bytes"], source["size_bytes"]))
+
+    # Double quotes so the suggested command pastes into cmd/PowerShell as well as sh.
+    print("\nre-extract:\n  python %s \"%s\" %s" % (
+        os.path.relpath(__file__), args.game_dir, args.out_dir))
+    print("then tag the result:\n  git -C %s tag -a exe-%s" % (
+        args.out_dir, source["sha256"][:12]))
+    return 1
 
 
 def read_provenance(out_dir):
@@ -407,6 +444,10 @@ def main():
     ap.add_argument("out_dir")
     ap.add_argument("--dump-assets", metavar="DIR",
                     help="also write every decompressed asset here (large: includes audio)")
+    ap.add_argument("--check", action="store_true",
+                    help="report whether out_dir was built from the current game binary "
+                         "and exit, without extracting. Exit 0 when current, 1 when a "
+                         "re-extract is due.")
     args = ap.parse_args()
 
     exes = [f for f in os.listdir(args.game_dir) if f.lower().endswith(".exe")]
@@ -415,10 +456,17 @@ def main():
     exe = os.path.join(args.game_dir, max(
         exes, key=lambda f: os.path.getsize(os.path.join(args.game_dir, f))))
 
-    print("reading %s" % exe)
+    if not args.check:
+        print("reading %s" % exe)
     source = fingerprint(exe, args.game_dir)
     previous = read_provenance(args.out_dir)
-    if previous and previous.get("game", {}).get("sha256") == source["sha256"]:
+    unchanged = bool(previous) and \
+        previous.get("game", {}).get("sha256") == source["sha256"]
+
+    if args.check:
+        # Hash-only verdict, so this is cheap enough to run before every session.
+        sys.exit(report_freshness(args, source, previous, unchanged))
+    if unchanged:
         print("  game binary unchanged since the last extract (%s)"
               % previous.get("extracted_at", "?"))
     assets = read_assets(exe)
