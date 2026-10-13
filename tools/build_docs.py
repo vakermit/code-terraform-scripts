@@ -153,8 +153,11 @@ PATTERNS = {
     #                found by walking back, so a build that reorders entries or inserts
     #                a new one ahead of the anchor still resolves.
     "components":    r"\{id:[^,]{1,8},nameKey:" + q("components.commander.name"),
-    "types":         r"\{typeName:" + q("Component") + r",docsGroup:",
-    "builtin_types": r"\{typeName:" + q("list") + r",docsGroup:",
+    # Anchor on the type NAME only. The 2026-10-13 build inserted a `construction:`
+    # field between `typeName` and `docsGroup`, which broke an anchor that named the
+    # following field; the enclosing-bracket walk already makes field order irrelevant.
+    "types":         r"\{typeName:" + q("Component") + r",",
+    "builtin_types": r"\{typeName:" + q("list") + r",",
     "globals":       r"\{name:" + q("boot") + r",signature:",
     "lang":          r"\{id:" + q("variables") + r",titleKey:",
     "builtins":      r"\{name:" + q("print") + r",signature:",
