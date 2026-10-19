@@ -274,5 +274,6 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 
 - [ ] Create one Automation in game and record how it appears on disk — blocks the kernel's deployment path and is currently fog.
 - [ ] Explicit slot mapping in `ct_sync` for cards and automations — delegated to its own session, since several `panel_N` slots currently collapse to one base name.
+- [ ] ISC-11 cannot be verified on this base: every generator is tier 1, so no machine consumes water and the lease has nothing to throttle. It needs a Mk III pack installed before the claim means anything. Left as an open claim rather than a fog entry, because the question is precisely stated and the falsifier is nameable; only the hardware is missing.
 - [ ] Write the five unwritten `tools/check-*.sh` probes that F0 claims already name — no-hardcoded-ids, capability-probes, fail-safe-declared, no-remote-actuation, no-wipe, prefix-ownership. ISC-1's probe exists and is green; the rest are named in Test Strategy but have no script yet, so those claims cannot go red-before-build until they do.
 - [ ] Decide whether the Steam Condenser changes the water allocation problem enough to re-rank — gated behind 1,000,000 Plants, far outside this run.
