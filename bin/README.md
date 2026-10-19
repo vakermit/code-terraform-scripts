@@ -202,10 +202,31 @@ codeterraform-scripts.json: 46 script slot(s), 9 library/libraries, 2 retired.
   panel_9                  mapped, but codeterraform-scripts.json has no such slot
 ```
 
-All of it is advisory and none of it is fatal. The file belongs to the game, which
-rewrites it whenever the save changes, so it can be absent, caught half-written, or a
-shape this tool has not seen; every check degrades to silence. It is **never written**:
-a sync that edited it would be writing over what the game had just decided.
+One more game-owned file is read, for labels only. `codeterraform-workspace.json`
+keeps each card's **title** in `context.customPanels`, keyed by slot id, and the title
+is the one thing you need in order to write a map entry and cannot get from the file
+name. So `status` says which card a slot is:
+
+```
+Slot map (1), slots named rather than inferred:
+  panel_1                  scripts\phase02\control_room\controller.py   (card 'controller')
+
+codeterraform-scripts.json: 46 script slot(s), 9 library/libraries, 2 retired.
+  panel_2                  is the card 'fleet', with no slots.toml entry; name it in scripts\phase02\slots.toml
+```
+
+The map stays keyed on the **slot id**, not the title. The id is what the manifest keys
+on and what the file is named, while a title is the player's to rename whenever. The id
+is also the more stable of the two: `abandonedPaths` shows the game retires an id rather
+than reusing it, so deleting a card leaves a hole rather than handing its number to the
+next one. `solar_12` was deleted in this save and the next two panels became 13 and 14;
+`fabricator_1` was replaced by `fabricator_2`. A map entry for a slot the game has since
+retired is reported, so the delete case is not silent either.
+
+All of it is advisory and none of it is fatal. Both files belong to the game, which
+rewrite them whenever the save changes, so either can be absent, caught half-written, or
+a shape this tool has not seen; every check degrades to silence. Neither is **ever
+written**: a sync that edited one would be writing over what the game had just decided.
 
 ## What counts as fillable
 
@@ -312,7 +333,8 @@ have code); use the `xyz` marker for that.
 ## What it never touches
 
 - Anything that isn't a top-level `.py` — so `.pyi` stubs, `codeterraform-scripts.json`
-  (read, never written), `pyrightconfig.json`, `typeshed-LICENSE.txt`
+  and `codeterraform-workspace.json` (read, never written), `pyrightconfig.json`,
+  `typeshed-LICENSE.txt`
 - `user_stubs.py` (the game promises never to overwrite it either)
 - the `lib/` subdirectory
 - the game's own `.codeterraform-retired-*` and `.codeterraform-write.bak` files

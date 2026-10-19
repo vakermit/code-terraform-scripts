@@ -100,6 +100,7 @@ SLOTS = "slots.toml"                # scripts/<phase>/slots.toml: explicit slot 
 SLOT_TABLE = "slots"                # the one table in it that is implemented
 AUTOMATION_TABLE = "automations"    # reserved; see "the automation seam" below
 MANIFEST = "codeterraform-scripts.json"     # the game's own slot register. Read only.
+WORKSPACE = "codeterraform-workspace.json"  # holds each card's title. Read only.
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -744,6 +745,41 @@ def read_manifest(save_dir: Path):
     return Manifest(path, scripts, libraries, abandoned)
 
 
+def card_titles(save_dir: Path) -> dict:
+    """Slot id -> the card's title in the Control Room, from the workspace file.
+
+    The game names a card's *file* by position, but it does remember what the
+    player called the card: `context.customPanels` keys a slot id to a record
+    whose `name` is the title shown in the room. That is the one thing you need
+    to write a map entry and cannot get from the file name, so it is reported
+    beside each slot -- "panel_2 is the card you called fleet, map it to this".
+
+    It is read, never written, and only used to label what is already there. The
+    map stays keyed on the slot id, because that is what the manifest keys on and
+    what the file is named, while a title is the player's to change at any time.
+    `abandonedPaths` in the manifest shows the game retires an id rather than
+    reusing it -- `solar_12` was deleted and the next two panels became 13 and 14
+    -- so an id is the stabler of the two. Same contract as the manifest: absent,
+    unparseable or a shape we have not seen all come back empty.
+    """
+    try:
+        data = json.loads((save_dir / WORKSPACE).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+    panels = (data.get("context") or {}).get("customPanels")
+    if not isinstance(panels, dict):
+        return {}
+    out = {}
+    for key, card in panels.items():
+        if not isinstance(card, dict):
+            continue
+        slot = card.get("scriptId") or card.get("id") or key
+        title = card.get("name")
+        if isinstance(slot, str) and isinstance(title, str) and title:
+            out[slot] = title
+    return out
+
+
 def check_map_against_manifest(manifest, opts: "Options") -> None:
     """Warn about map entries the game does not have a slot for.
 
@@ -763,18 +799,29 @@ def check_map_against_manifest(manifest, opts: "Options") -> None:
             warn("  %-24s mapped, but %s has no such slot" % (slot, MANIFEST))
 
 
-def check_manifest_coverage(manifest, index, opts: "Options") -> None:
-    """Warn about slots the game has that this repo cannot fill either way."""
+def check_manifest_coverage(manifest, index, opts: "Options", cards=None) -> None:
+    """Warn about slots the game has that this repo cannot fill either way.
+
+    A card says so, and says which card it is: an unmapped `panel_2` is not a
+    missing script so much as a line you have not written yet, and the title is
+    what tells you which file to point it at.
+    """
     if manifest is None:
         return
+    cards = cards or {}
     for slot in sorted(manifest.scripts):
         if opts.slots.declared(slot):
             continue                      # mapped; any trouble with it is reported there
         group = index.get(base_name(slot))
         if group is not None and group.select(None, opts)[0] is not None:
             continue
-        warn("  %-24s is a slot in %s with no %s entry and no name match in %s"
-             % (slot, MANIFEST, SLOTS, show(opts.scripts_dir)))
+        if slot in cards:
+            warn("  %-24s is the card %r, with no %s entry; name it in %s"
+                 % (slot, cards[slot], SLOTS,
+                    show(opts.scripts_dir / phase_label(opts.phase) / SLOTS)))
+        else:
+            warn("  %-24s is a slot in %s with no %s entry and no name match in %s"
+                 % (slot, MANIFEST, SLOTS, show(opts.scripts_dir)))
 
 
 # ------------------------------------------------------------------- ambiguity
@@ -1306,11 +1353,14 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
     report_conflicts(conflicts)
     report_slot_problems(opts.slots)
 
+    cards = card_titles(opts.save_dir)
     named = opts.slots.entries(opts)
     if named:
         typer.echo("\nSlot map (%d), slots named rather than inferred:" % len(named))
         for slot, entry in sorted(named.items()):
             notes = []
+            if slot in cards:
+                notes.append("card %r" % cards[slot])
             if entry.phase != opts.phase:
                 notes.append("from %s" % phase_label(entry.phase))
             if not entry.path.is_file():
@@ -1387,7 +1437,7 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
                    % (MANIFEST, len(manifest.scripts), len(manifest.libraries),
                       len(manifest.abandoned)))
         check_map_against_manifest(manifest, opts)
-        check_manifest_coverage(manifest, index, opts)
+        check_manifest_coverage(manifest, index, opts, cards)
     typer.echo("")
 
 
