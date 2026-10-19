@@ -3,7 +3,7 @@ task: "Phase 3 — full base automation platform for Code: Terraform"
 slug: 20261019-150000_phase03-automation-platform
 project: code-terraform-game
 phase: scoping
-progress: 0/47
+progress: 0/48
 started: 2026-10-19T15:00:00Z
 updated: 2026-10-19T15:00:00Z
 principal_stated_goal: "then we will do a full rewrite for the next phase (3?)"
@@ -118,8 +118,9 @@ I leave the base for an hour of real time and come back to find it further along
 | ISC-32 | manual | freight is preempted only on an expiring deadline | trace names it | `saturate drone hours, trigger a storm` | derived: earliest-deadline-first |
 | ISC-33 | manual | transmission fragments outlive the audible window | packets retained | `read fragments after the window closes` | derived: stateless-source |
 | ISC-34 | manual | Insight is spent from a pooled ranking | spend crosses species | `reach two colonies, observe an unlock` | literal |
+| ISC-49 | manual | every discretionary machine appears in an allocation | 0 unnamed | `compare an allocation to the enumerated consumers` | derived: pipeline-direction |
 | ISC-35 | manual | any idle machine is explained by one trace row | answer in one row | `pick an idle machine, read the card` | literal |
-| ISC-36 | manual | the trace is bounded | <=40 rows, 1 key | `read the trace key node count` | derived: archive-budget |
+| ISC-36 | manual | the trace is bounded per loop | <=40 rows, 1 key each | `read each loop's trace key node count` | derived: archive-budget |
 | ISC-37 | manual | the card renders state and issues no commands | 0 writes from the card | `read the card source, watch a full tick` | derived: cards-are-views |
 | ISC-38 | manual | each loop reaps its own prefix | 0 orphans after decommission | `decommission a machine, read archive keys` | derived: one-writer |
 | ISC-39 | manual | the Crop Automator queue head is policed | blocked head reordered | `block the head, observe the reorder` | literal |
@@ -199,8 +200,9 @@ Why: storm aftermath, weekly boards and Insight all expire or compound on their 
 ### F6 · I can see why
 Why: four loops allocating from a learned model is opaque in a way phase 2 never was, and per-script breakpoints cannot debug a decision spread across four scripts.
 
+- [ ] ISC-49: A discretionary machine is named in every allocation, so permission is granted rather than merely not withheld.
 - [ ] ISC-35: Any machine being off is explained by one row of the decision trace.
-- [ ] ISC-36: The trace is bounded to forty rows in a single Archive key.
+- [ ] ISC-36: The trace is bounded to forty rows per loop, each loop owning its own key.
 - [ ] ISC-37: A card renders the envelope, the current allocation and the trace without issuing commands.
 - [ ] ISC-44: Antecedent: the trace rows read as reasons a day later, with the machine, the rank, the figure and the cause on one line.
 
@@ -232,11 +234,22 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: The wattage table is a high-water mark per machine type rather than a live reading. A grid member's consumed figure is documented as 0 W for a powered-off or idle machine, so the live reading cannot say what a machine would draw once it starts, which is the only figure headroom needs.
 - 2026-10-19: ISC-41 dropped as a duplicate of ISC-10; both asserted that no remote actuation call appears in phase03. Tombstoned rather than renumbered, per ID stability.
 - 2026-10-19: F7 and F8 re-homed. Archive hygiene (ISC-38, ISC-40) and the unattended-hour acceptance claim (ISC-43) were misfiled under biosphere and deployment; they are cross-cutting. ISC-45 to ISC-48 added so both features carry claims of their own subject.
 - 2026-10-19: Opportunity may preempt freight on an expiring deadline, against a standing drone reserve the planner holds back. Aftermath expires in 48 to 96 hours behind a 4-hour decode window, so a fully committed fleet would simply lose it.
 
 ## Learning
+
+- conjectured: the decision trace could be one Archive key that every loop appends to, since forty rows is small and the loops run at different cadences.
+  refuted by: writing it. A shared key has two or more writers, which is exactly the contention the one-writer-per-prefix rule was adopted to avoid, and the Archive offers no lock worth building on.
+  learned: a shared log is shared mutable state wearing a different hat. Each loop owns its own trace key and the card merges on the world hour, the only clock all four share.
+  criterion now: ISC-36.
+
+- conjectured: the planner need only allocate to machines that consume a scarce fluid, since those are the ones in contention.
+  refuted by: writing the smelter. Its fail-safe is to idle, so a machine the planner never names idles forever. An allocation is permission, and silence reads as refusal.
+  learned: a fail-safe of idle obliges the planner to name that machine every pass. Discretionary machines get a run grant with no quantity, because their draw already sits inside the envelope safety measured.
+  criterion now: ISC-49.
 
 - conjectured: central control was impossible because hardware actions are self-only, so the controller could only advise.
   refuted by: `run_control` documented verbatim as "use it to build a supervisor", carrying `allowsRemoteWrites: True`, alongside `power_control.set_powered` and `.total()`.
