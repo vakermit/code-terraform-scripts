@@ -37,6 +37,12 @@ from bus import publish_envelope, shed_order
 from trace import note
 
 LOOP = "safety"
+# Rehearsal switch. False makes every breaker command a print instead: the
+# loop measures, publishes its envelope and says exactly what it WOULD shed
+# or restore, and touches nothing. A script that can switch a base off
+# should be watchable for a while before it is believed, so this ships off
+# and you turn it on once the trace reads the way you expect.
+ENFORCE = False
 PASS_S = 5.0                 # real seconds between passes
 RESERVE_W = 150              # watts never offered to the planner
 SETTLE_PASSES = 3            # passes to wait after a shed before shedding again
@@ -165,6 +171,12 @@ def shed_to_fit(deficit_w, table, seen, ours, hour):
         for m in seen:
             if m.id == machine_id:
                 rated = max(m.consumed, table.get(m.type_id, 0))
+        if not ENFORCE:
+            note(LOOP, hour, machine_id, "would shed, rehearsing",
+                 {"w": rated, "need": deficit_w, "by": how})
+            freed = freed + rated
+            cut = cut + 1
+            continue
         result = grid.set_powered(machine_id, False)
         if result.status != "ok":
             note(LOOP, hour, machine_id, "shed refused", {"why": result.status})
@@ -199,6 +211,10 @@ def restore(seen, headroom_w, table, ours, hour):
             continue                      # not ours to restore; see the banner
         rated = table.get(m.type_id, 0)
         if rated > headroom_w:
+            continue
+        if not ENFORCE:
+            note(LOOP, hour, m.id, "would restore, rehearsing", {"w": rated})
+            headroom_w = headroom_w - rated
             continue
         result = grid.set_powered(m.id, True)
         if result.status == "ok":
@@ -237,6 +253,8 @@ def water_supply():
 
 def main():
     report(LOOP)
+    if not ENFORCE:
+        print("safety: REHEARSING, no breaker will be touched")
     book = get_component("notebook")
     table = {}
     ours = {}
