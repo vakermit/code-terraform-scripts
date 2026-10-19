@@ -29,7 +29,13 @@
 # =============================================================================
 
 from capability import clock, hours, missing, network, now_hour, report, terraforming
-from bus import envelope, publish_allocation, publish_shed
+# `publish` and the channel names, never a writer helper. The game runs the
+# library copy recorded in the save, NOT the file on disk — proven by this
+# loop dying on `publish_allocation() takes 2 positional arguments but 3 were
+# given` while the file had three. So a loop may only depend on signatures
+# that never change: `publish(channel, value)` is two arguments and always
+# will be. Readers like `envelope()` are safe because their shape is fixed.
+from bus import ALLOC, SHED, envelope, publish
 from trace import note
 
 LOOP = "plan"
@@ -342,8 +348,12 @@ def main():
         by_outpost, order = allocate(rows, free, rates, gap, hour)
         ttl = lease_ttl()
         for outpost_id in by_outpost:
-            publish_allocation(outpost_id, by_outpost[outpost_id], ttl)
-        publish_shed(order)
+            # The allocation's shape is this loop's own output, so it is
+            # built here: {ttl_s, machines}, with the horizon travelling
+            # inside the payload because only this loop knows its cadence.
+            publish(ALLOC + outpost_id,
+                    {"ttl_s": ttl, "machines": by_outpost[outpost_id]})
+        publish(SHED, order)
 
         hours(PASS_H)
 

@@ -234,6 +234,8 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: No writer helpers live in `lib/bus.py`. Each loop builds its own payload and publishes it through `publish(channel, value)`, whose two arguments cannot change. Readers stay shared because the publisher fixes their shape. This is a rule, not an omission.
+- 2026-10-19: `tools/resync_libs.py` is part of the deployment path, documented in bin/README.md. ct_sync mirroring lib files is necessary and not sufficient; the registration inside the save holds the source that executes, and it is chosen by writeSequence rather than filename because the ring buffers make mtime a liar.
 - 2026-10-19: The planner's currencies are re-aimed at the tier the base is actually at. Oxygen reads 41 and pressure 7.65 at 17 hours played; every generator is tier 1 but the two pressure units, and only Mk II pack tech is unlocked. Mk III, where water intake begins, gates at 625,000 Terraform Index. So the water contention the whole value model was built around does not exist in this save and will not for a long time, which is why `tonnes` read empty and four generators were traced starved every pass. Ingots are contended today — a pack for a tier rise later, or an Earth order for credits now — so that is what gets ranked.
 - 2026-10-19: A want activates by reading the machine's installed tier rather than by a hard-coded flag, so the water allocation switches itself on the day a Mk III pack is installed and says nothing until then. A dormant want means the machine is skipped, not ranked and starved: "this does not apply to you" and "you may have none of this" are different claims and only one of them was true.
 - 2026-10-19: Counted goods travel in the envelope's own `stock` field rather than sharing `tonnes` with rates. A count of ingots and a tonne per hour are different kinds of number, and the contended-goods list is named in both loops because the pipeline flows one way: a loop that measures must not have to ask the loop that decides what to measure.
@@ -254,6 +256,11 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Opportunity may preempt freight on an expiring deadline, against a standing drone reserve the planner holds back. Aftermath expires in 48 to 96 hours behind a 4-hour decode window, so a fully committed fleet would simply lose it.
 
 ## Learning
+
+- conjectured: syncing a library file into the save is enough to change what the game runs, since the docs say the game picks up later edits automatically.
+  refuted by: the planner dying on `publish_allocation() takes 2 positional arguments but 3 were given` while the file on disk had taken three for some time. The save stores each registered library's source and runs that copy.
+  learned: two rules. A loop may depend only on signatures that cannot change — `publish(channel, value)` — so each one builds its own payload and no writer helpers live in the library. And a library edit needs the registration rewritten, which `tools/resync_libs.py` now does. I had worked this out for the safety loop and left the planner calling a helper, which is the whole bug.
+  criterion now: ISC-48.
 
 - conjectured: the scarce things worth allocating are water, steam and watts, because that is where the documented multipliers are — 200x supplied against 5x starved.
   refuted by: reading the save's actual progress instead of the manual. Oxygen 41, pressure 7.65, every generator tier 1, no Mk III tech. The multipliers are real and 600,000 Terraform Index away.

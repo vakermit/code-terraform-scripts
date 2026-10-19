@@ -107,20 +107,25 @@ def envelope():
 
 
 # -------------------------------------------------------------------- leases
-def publish_allocation(outpost_id, machines, ttl_s):
-    """The planner's allocation for one outpost.
-
-    Shape: {"ttl_s": seconds, "machines": {machine_id: {field: value}}}.
-
-    The horizon travels with the payload because only the publisher knows its
-    own cadence, and that cadence is measured in world hours while an age is
-    measured in simulation seconds. A reader guessing the conversion gets it
-    wrong by two orders of magnitude, which is how a dead planner came to
-    hold a stale lease for 145 passes.
-    """
-    return publish(ALLOC + outpost_id, {"ttl_s": ttl_s, "machines": machines})
-
-
+# NO WRITER HELPERS LIVE HERE, and that is a rule rather than an omission.
+#
+# The game runs the library copy recorded in the save, not the file on disk.
+# That is proven, not suspected: the planner died on `publish_allocation()
+# takes 2 positional arguments but 3 were given` while the file on disk had
+# taken three for some time. Syncing the file does not update the running
+# library, so any helper whose signature grows breaks every caller until the
+# registration is rewritten.
+#
+# So writers depend only on `publish(channel, value)`, which is two arguments
+# and always will be, and each loop builds its own payload. Readers are safe
+# to share because their shape is fixed by the publisher.
+#
+# ALLOCATION SHAPE, written by the planner to ALLOC + outpost_id
+#   ttl_s      simulation seconds this allocation should be believed for,
+#              computed by the planner from its own cadence and the clock
+#   machines   {machine_id: {resource: amount, "rank": n, "hour": h}}, or
+#              {"run": True} for a machine that needs permission, not a
+#              quantity
 def lease(machine_id, outpost_id):
     """This machine's lease, or None when there is no fresh allowance for it.
 
@@ -161,9 +166,9 @@ def allowance(machine_id, outpost_id, field, default=0):
 
 
 # ---------------------------------------------------------------- shed order
-def publish_shed(ranked):
-    """Machine ids worst-value first. Safety walks this; it never re-ranks."""
-    return publish(SHED, ranked)
+# The shed order is written straight to SHED by the planner, for the same
+# reason as the allocation: a list of machine ids worst-value first, which
+# safety walks and never re-ranks.
 
 
 def shed_order():

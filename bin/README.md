@@ -180,7 +180,23 @@ A file new to the save needs one in-game step, as that note says: the editor off
 tracks it in `libraryScripts` and picks up later edits automatically.
 
 A save copy that has diverged, because you edited it in game, is reported and **not**
-clobbered. Mark it with `xyz` to let the repo win. `build_index` skips `lib/`
+clobbered. Mark it with `xyz` to let the repo win.
+
+**Syncing the file is not enough to change what runs.** A registered library's
+source is also stored inside the save, and that stored copy is what the game
+executes. Edit a library, sync, reload, and the game runs the old text — silently
+if only a body changed, and with an argument-count error naming a signature that
+matches the file you are looking at if the signature changed. After changing any
+library, with the game closed:
+
+```bash
+python tools/resync_libs.py           # or --dry-run to just look
+```
+
+It rewrites each registered library source from its file, touching only the ones
+that differ and backing the save up first. It never creates a registration: a
+new file still needs the game's **Import as Game Library** once, because only
+the game can allocate an incarnation id. `build_index` skips `lib/`
 entirely, so a library is never mistaken for a machine script.
 
 Libraries cannot see a caller's globals — the game docs are explicit that "caller-local
