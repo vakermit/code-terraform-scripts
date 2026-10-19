@@ -72,7 +72,6 @@ I leave the base for an hour of real time and come back to find it further along
 
 ## Not yet specified
 
-- fog: how an Automation appears in the save's external-editor directory, and whether `ct_sync` can reach it at all — no Automation exists in the save yet, so the deployment path for the kernel itself is unverified. Resolves by creating one in game and inspecting the directory and `codeterraform-scripts.json`.
 - fog: what the planner's value function should do with a pillar that is already complete but whose machines still feed the carbon cycle — the docs warn against shutting such a supply down, but give no reading that distinguishes it. Resolves by finding whether `pillars()` or `atmosphere` exposes the coupling.
 - fog: whether Insight spending can be ranked at all before a second colony exists, since the curve is cumulative and shared. Resolves once two colonies are founded and `get_insight()` can be sampled against population.
 - fog: how to estimate a Pioneer-hour's cost well enough to allocate it as a currency — phase 2's scout library remembers real trip costs, but not in a form the planner can price against water. Resolves by instrumenting one construction round trip and reading the recorded cost back.
@@ -234,6 +233,8 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: Automation deployment is solved, and the fog entry asking about it is killed. An Automation created in game appears as `automation_N.py` in the same external-editor directory as every other script, so `ct_sync` reaches it exactly as it reaches a Control Room card — by slot id, through the slot map, with no new mechanism. ISC-48 already carries the claim.
+- 2026-10-19: Registered `capability`, `bus` and `trace` by writing `state.libraryScripts` in the save directly, with the game stopped and a backup taken, because the in-game Import as Game Library step is not something a script can reach. The schema was copied from an existing entry rather than invented: source three times over, a fresh `libraryIncarnationId` from the high-water counter, everything else at its idle default.
 - 2026-10-19: Safety ships with its breaker disarmed (`ENFORCE = False`), printing what it would shed rather than shedding. The first pass runs on an empty wattage table and reads the base from live draw alone, so on a base near capacity it could shed within seconds of starting, against the crude fallback order because no planner is ranking yet. A loop that can switch a base off earns a rehearsal.
 - 2026-10-19: Safety restores only machines recorded in its own shed ledger, persisted as `safety.shed`. Restoring every unpowered machine would have overridden the operator's own power-offs, which Principles forbids, and an unpersisted ledger would leave shed machines dark forever after a reload.
 - 2026-10-19: The wattage table is a high-water mark per machine type rather than a live reading. A grid member's consumed figure is documented as 0 W for a powered-off or idle machine, so the live reading cannot say what a machine would draw once it starts, which is the only figure headroom needs.
@@ -242,6 +243,11 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Opportunity may preempt freight on an expiring deadline, against a standing drone reserve the planner holds back. Aftermath expires in 48 to 96 hours behind a 4-hour decode window, so a fully committed fleet would simply lose it.
 
 ## Learning
+
+- conjectured: an unregistered file under `lib/` is importable anyway, since both machine scripts reported `running` with no error after the swap.
+  refuted by: the console history. `automation_1` died on `ModuleNotFoundError: No module named 'capability'` at its import line. The machine scripts' own failures had simply rotated out of a 500-entry console window before I looked.
+  learned: registration is required, and "no error in the snapshot" is not evidence of success when the evidence window is a ring buffer. Read the console history, not the status field.
+  criterion now: ISC-48.
 
 - conjectured: the decision trace could be one Archive key that every loop appends to, since forty rows is small and the loops run at different cadences.
   refuted by: writing it. A shared key has two or more writers, which is exactly the contention the one-writer-per-prefix rule was adopted to avoid, and the Archive offers no lock worth building on.
