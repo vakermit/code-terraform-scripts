@@ -3,9 +3,9 @@ task: "Phase 3 — full base automation platform for Code: Terraform"
 slug: 20261019-150000_phase03-automation-platform
 project: code-terraform-game
 phase: climbing
-progress: 2/48
+progress: 7/48
 started: 2026-10-19T15:00:00Z
-updated: 2026-10-19T16:40:00Z
+updated: 2026-10-19T17:05:00Z
 principal_stated_goal: "then we will do a full rewrite for the next phase (3?)"
 principal_stated_goal_source: conversation
 principal_stated_goal_signal: 4
@@ -158,14 +158,14 @@ Why: it proves the whole stack on a single path before any of it is widened, so 
 - [ ] ISC-12: The oxygen generator holds its last good setpoint when no fresh lease exists.
 - [ ] ISC-13: The smelter idles when no fresh lease exists.
 - [ ] ISC-14: `FAIL_SAFE` is declared in each machine script, not supplied by the kernel.
-- [ ] ISC-15: The safety loop publishes an envelope naming free watts, free tonnes and the reserve floor.
-- [ ] ISC-16: The planner publishes per-outpost allocation dicts keyed by machine id, one broadcast per outpost.
+- [x] ISC-15: The safety loop publishes an envelope naming free watts, free tonnes and the reserve floor.
+- [x] ISC-16: The planner publishes per-outpost allocation dicts keyed by machine id, one broadcast per outpost.
 
 ### F2 · The base never browns out
 Why: brownout is all-or-nothing with no consumer priority, so the only winning move is to never reach the cliff. (after: ISC-15)
 
 - [ ] ISC-17: Battery autonomy at the projected deficit never falls below the floor across 24 world hours of normal play, and no brownout occurs.
-- [ ] ISC-18: The per-machine wattage table is measured rather than assumed.
+- [x] ISC-18: The per-machine wattage table is measured rather than assumed.
 - [ ] ISC-19: A machine the safety loop switched off is switched back on when headroom returns, and a machine the operator switched off is left alone.
 - [ ] ISC-20: Anti: life support is never the first thing shed.
 
@@ -199,9 +199,9 @@ Why: storm aftermath, weekly boards and Insight all expire or compound on their 
 ### F6 · I can see why
 Why: four loops allocating from a learned model is opaque in a way phase 2 never was, and per-script breakpoints cannot debug a decision spread across four scripts.
 
-- [ ] ISC-49: A discretionary machine is named in every allocation, so permission is granted rather than merely not withheld.
+- [x] ISC-49: A discretionary machine is named in every allocation, so permission is granted rather than merely not withheld.
 - [ ] ISC-35: Any machine being off is explained by one row of the decision trace.
-- [ ] ISC-36: The trace is bounded to forty rows per loop, each loop owning its own key.
+- [x] ISC-36: The trace is bounded to forty rows per loop, each loop owning its own key.
 - [ ] ISC-37: A card renders the envelope, the current allocation and the trace without issuing commands.
 - [ ] ISC-44: Antecedent: the trace rows read as reasons a day later, with the machine, the rank, the figure and the cause on one line.
 
@@ -233,6 +233,7 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: The lease path is proven end to end. With the kernel running, `o2gen_1` printed `fully supplied` and `smelter_1` printed `leased, running` — a machine's behaviour changed because of a broadcast allowance, which is the whole premise of the architecture. The autonomy fix also showed its work: 27.7 hours of storage against the deficit, so safety held where the previous build wanted to shed at 6.08 W.
 - 2026-10-19: An unmeasured fluid fails open. A fluid absent from the envelope means safety could not measure it, which the planner now distinguishes from a measured zero: it grants the full want and says so in the trace. Starving every machine that needs a fluid because the reading failed is the worse of the two mistakes, and a machine below the tier that consumes it ignores the grant anyway.
 - 2026-10-19: Safety never sheds a machine whose rated draw is zero. The first run rehearsed shedding two machines at `w: 0`, which frees nothing and buys only a dark machine; an idle machine reports no draw and a type never seen busy is absent from the wattage table, so this is the common case early rather than an edge.
 - 2026-10-19: Automation deployment is solved, and the fog entry asking about it is killed. An Automation created in game appears as `automation_N.py` in the same external-editor directory as every other script, so `ct_sync` reaches it exactly as it reaches a Control Room card — by slot id, through the slot map, with no new mechanism. ISC-48 already carries the claim.
@@ -287,6 +288,11 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 
 - ISC-1: `tools/check-syntax.sh scripts/phase03` green at a570daf.
 - ISC-2: `ct_sync phases --phase 3` reports 41 of 41 resolved, no ambiguity, at a570daf.
+- ISC-15: bus channel `env` carries watts_free, reserve_w, tonnes, autonomy_h, stored_wh at save wseq 2093.
+- ISC-16: bus channel `alloc.outpost_home` carries six machines keyed by id, one broadcast for the outpost, wseq 2093.
+- ISC-18: `safety.watts` learned temp_heater 2 then 6, oxygen_generator 8, pressure_generator 35 across two runs.
+- ISC-36: `safety.trace` and `plan.trace` are separate Archive keys, each bounded, wseq 2093.
+- ISC-49: `smelter_1` and `fabricator_2` appear in the allocation with a bare `run` grant, wseq 2093.
 
 ## Remaining Work
 
