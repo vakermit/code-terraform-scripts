@@ -66,7 +66,15 @@ def share():
     A missing lease answers None rather than 0, because "nobody told me" and
     "you get nothing" must land in different branches: the first holds, the
     second obeys.
+
+    Below Mk III the answer is always 1.0 whatever the lease says. Water is
+    installed by the Mk III pack, so a Mk I or Mk II generator consumes none
+    of it and throttling one against a water allowance would starve a machine
+    for a resource it does not use. The planner allocates by type and cannot
+    see the installed tier; the machine can, so the machine decides.
     """
+    if self.tier() < 3:
+        return 1.0
     held = lease(self.id, outpost_id)
     if held == None:
         return None
