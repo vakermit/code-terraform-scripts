@@ -85,10 +85,7 @@ def learn_draw(table, seen):
     for m in seen:
         if m.consumed <= 0:
             continue                      # off or idle: tells us nothing
-        known = 0
-        if table.has(m.type_id):
-            known = table[m.type_id]
-        if m.consumed > known:
+        if m.consumed > table.get(m.type_id, 0):
             table[m.type_id] = m.consumed
             changed = True
     return changed
@@ -105,12 +102,7 @@ def projected_load(table, seen):
     for m in seen:
         if "consumer" not in m.roles:
             continue
-        rated = 0
-        if table.has(m.type_id):
-            rated = table[m.type_id]
-        if m.consumed > rated:
-            rated = m.consumed
-        total = total + rated
+        total = total + max(table.get(m.type_id, 0), m.consumed)
     return total
 
 
@@ -153,8 +145,13 @@ def shed_candidates(seen):
     return ranked, "conservative fallback"
 
 
-def shed_to_fit(deficit_w, table, seen, hour):
-    """Switch machines off until the projected deficit is covered."""
+def shed_to_fit(deficit_w, table, seen, ours, hour):
+    """Switch machines off until the projected deficit is covered.
+
+    Every machine switched off is written into `ours` so it can be switched
+    back on later, and so that a machine the operator turned off by hand is
+    never mistaken for one of ours.
+    """
     grid = power()
     if grid == None:
         return 0
@@ -167,13 +164,12 @@ def shed_to_fit(deficit_w, table, seen, hour):
         rated = 0
         for m in seen:
             if m.id == machine_id:
-                rated = m.consumed
-                if table.has(m.type_id) and table[m.type_id] > rated:
-                    rated = table[m.type_id]
+                rated = max(m.consumed, table.get(m.type_id, 0))
         result = grid.set_powered(machine_id, False)
         if result.status != "ok":
             note(LOOP, hour, machine_id, "shed refused", {"why": result.status})
             continue
+        ours[machine_id] = hour
         freed = freed + rated
         cut = cut + 1
         note(LOOP, hour, machine_id, "shed for power",
@@ -183,12 +179,15 @@ def shed_to_fit(deficit_w, table, seen, hour):
     return freed
 
 
-def restore(seen, headroom_w, table, hour):
-    """Switch back on what we switched off, newest-shed last, while it fits.
+def restore(seen, headroom_w, table, ours, hour):
+    """Switch back on what WE switched off, while it fits in the headroom.
 
-    A machine safety turned off stays off until safety turns it back on — the
-    game does not rejoin a manually powered machine when the grid recovers.
-    Leaving that to the operator would be a slow leak of dark machines.
+    `ours` is the ledger of machines this loop shed, which is the whole point:
+    the game does not rejoin a manually powered machine when the grid
+    recovers, so somebody has to, but "every machine that is currently off"
+    is the wrong set. It includes the ones the operator switched off
+    deliberately, and powering those back on would make this loop override
+    the person it works for — the one thing it must never do.
     """
     grid = power()
     if grid == None:
@@ -196,14 +195,15 @@ def restore(seen, headroom_w, table, hour):
     for m in seen:
         if m.powered or m.type_id in PROTECTED:
             continue
-        rated = 0
-        if table.has(m.type_id):
-            rated = table[m.type_id]
+        if not ours.has(m.id):
+            continue                      # not ours to restore; see the banner
+        rated = table.get(m.type_id, 0)
         if rated > headroom_w:
             continue
         result = grid.set_powered(m.id, True)
         if result.status == "ok":
             headroom_w = headroom_w - rated
+            ours.pop(m.id, None)
             note(LOOP, hour, m.id, "restored, headroom returned", {"w": rated})
 
 
@@ -239,8 +239,13 @@ def main():
     report(LOOP)
     book = get_component("notebook")
     table = {}
+    ours = {}
     if book != None:
         table = book.get("safety.watts", {})
+        # The shed ledger has to survive a restart, or a reload would leave
+        # every machine this loop switched off dark for good, with no record
+        # saying they were ours to switch back on.
+        ours = book.get("safety.shed", {})
     cooldown = 0
 
     while True:
@@ -264,13 +269,16 @@ def main():
 
         publish_envelope(max(0, spare), RESERVE_W, water_supply(), hour)
 
+        before = ours.length
         if cooldown > 0:
             cooldown = cooldown - 1
         elif spare < 0:
-            shed_to_fit(0 - spare, table, seen, hour)
+            shed_to_fit(0 - spare, table, seen, ours, hour)
             cooldown = SETTLE_PASSES
         elif spare > RESERVE_W:
-            restore(seen, spare - RESERVE_W, table, hour)
+            restore(seen, spare - RESERVE_W, table, ours, hour)
+        if ours.length != before and book != None:
+            book.set("safety.shed", ours)
 
         sleep(PASS_S)
 

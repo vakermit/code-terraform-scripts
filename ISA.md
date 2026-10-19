@@ -102,7 +102,7 @@ I leave the base for an hour of real time and come back to find it further along
 | ISC-16 | manual | one allocation dict is published per outpost | 1 per outpost | `list channels and count` | literal |
 | ISC-17 | manual | projected load stays under generation minus reserve | 0 brownouts in 24h | `run 24 world hours, read the trace` | literal |
 | ISC-18 | manual | the wattage table converges on measurement | within 10% observed | `compare the archive table to power total()` | derived: measure-not-assume |
-| ISC-19 | manual | a shed machine is restored when headroom returns | powered within one pass | `force a deficit, then relieve it` | derived: no-stranded-machines |
+| ISC-19 | manual | only machines safety shed are restored | operator-off untouched | `force a deficit, then relieve it` | derived: no-stranded-machines |
 | ISC-20 | manual | life support is never shed first | ranks last | `force a deficit, read the shed sequence` | derived: fail-safe-direction |
 | ISC-21 | manual | allocation shifts toward the largest pillar gap | follows the gap | `starve one pillar, observe the next allocation` | literal |
 | ISC-22 | manual | the rate table is seeded and tagged with confidence | every entry tagged | `read the table before any measurement` | derived: measure-not-assume |
@@ -167,7 +167,7 @@ Why: brownout is all-or-nothing with no consumer priority, so the only winning m
 
 - [ ] ISC-17: Projected load stays under generation minus reserve across 24 world hours of normal play.
 - [ ] ISC-18: The per-machine wattage table is measured rather than assumed.
-- [ ] ISC-19: A machine the safety loop switched off is switched back on when headroom returns.
+- [ ] ISC-19: A machine the safety loop switched off is switched back on when headroom returns, and a machine the operator switched off is left alone.
 - [ ] ISC-20: Anti: life support is never the first thing shed.
 
 ### F3 · Scarcity goes where it earns most
