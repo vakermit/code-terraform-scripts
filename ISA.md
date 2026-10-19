@@ -3,7 +3,7 @@ task: "Phase 3 — full base automation platform for Code: Terraform"
 slug: 20261019-150000_phase03-automation-platform
 project: code-terraform-game
 phase: climbing
-progress: 13/48
+progress: 14/48
 started: 2026-10-19T15:00:00Z
 updated: 2026-10-19T17:05:00Z
 principal_stated_goal: "then we will do a full rewrite for the next phase (3?)"
@@ -157,7 +157,7 @@ Why: it proves the whole stack on a single path before any of it is widened, so 
 
 - [ ] ISC-11: A water-fed Mk III generator throttles to the water figure in its lease.
 - [ ] ISC-12: The oxygen generator holds its last good setpoint when no fresh lease exists.
-- [ ] ISC-13: The smelter idles when no fresh lease exists.
+- [x] ISC-13: The smelter idles when no fresh lease exists.
 - [x] ISC-14: `FAIL_SAFE` is declared in each machine script, not supplied by the kernel.
 - [x] ISC-15: The safety loop publishes an envelope naming free watts, free tonnes and the reserve floor.
 - [x] ISC-16: The planner publishes per-outpost allocation dicts keyed by machine id, one broadcast per outpost.
@@ -234,6 +234,9 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: The trace deduplicates an unchanged decision. The planner runs every few seconds, so one fabricator starved by a persistent shortage wrote the same row forever and pushed everything else out of a forty-row window. A row matching the last one for that subject now updates its hour instead, keeping both when the condition started and that it still holds, for one slot rather than forty.
+- 2026-10-19: ISC-13 is verified by an accident rather than a test. The planner died on the library signature bug, which left the machines genuinely unled, and both printed their fail-safe lines. A real failure is better evidence than a contrived one, and it only became readable because solar had stopped flooding the console.
+- 2026-10-19: ISC-12 remains open even though a line saying `oxygen: no fresh lease, holding` appeared, because the o2gen running in the save predates the tier guard: it was never re-marked for refill after that commit. The code that produced the evidence is not the code in the repo, and counting it would be the ring-buffer mistake in a new costume.
 - 2026-10-19: No writer helpers live in `lib/bus.py`. Each loop builds its own payload and publishes it through `publish(channel, value)`, whose two arguments cannot change. Readers stay shared because the publisher fixes their shape. This is a rule, not an omission.
 - 2026-10-19: `tools/resync_libs.py` is part of the deployment path, documented in bin/README.md. ct_sync mirroring lib files is necessary and not sufficient; the registration inside the save holds the source that executes, and it is chosen by writeSequence rather than filename because the ring buffers make mtime a liar.
 - 2026-10-19: The planner's currencies are re-aimed at the tier the base is actually at. Oxygen reads 41 and pressure 7.65 at 17 hours played; every generator is tier 1 but the two pressure units, and only Mk II pack tech is unlocked. Mk III, where water intake begins, gates at 625,000 Terraform Index. So the water contention the whole value model was built around does not exist in this save and will not for a long time, which is why `tonnes` read empty and four generators were traced starved every pass. Ingots are contended today — a pack for a tier rise later, or an Earth order for credits now — so that is what gets ranked.
@@ -316,6 +319,7 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - ISC-18: `safety.watts` learned temp_heater 2 then 6, oxygen_generator 8, pressure_generator 35 across two runs.
 - ISC-36: `safety.trace` and `plan.trace` are separate Archive keys, each bounded, wseq 2093.
 - ISC-49: `smelter_1` and `fabricator_2` appear in the allocation with a bare `run` grant, wseq 2093.
+- ISC-13: console at save wseq 2166 — `smelter: no fresh lease, idle` during the window the planner was dead, then `leased, running` once it published again.
 - ISC-3, ISC-4, ISC-9, ISC-10, ISC-14, ISC-40: `tools/check-phase03.sh` all green, and each check verified red against an injected violation (6 of 6 caught) before being trusted. ISC-40's probe exempts `trace.py`, which writes a parameterised key its caller supplies.
 
 ## Remaining Work

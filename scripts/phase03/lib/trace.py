@@ -37,6 +37,15 @@ def note(loop, hour, subject, reason, detail=None):
     `subject` is what the decision was about — a machine id, a pillar, a
     channel. `reason` is why, in a handful of words that read as a reason a
     day later rather than as a log level. `detail` carries the figures.
+
+    A DECISION THAT HAS NOT CHANGED IS NOT NEWS. The planner runs every few
+    seconds, so a machine starved by a shortage that persists would write the
+    same row forever and push everything interesting out of a forty-row
+    window. The first run proved it: the trace filled with identical
+    `starved by envelope` rows for one fabricator. So a row matching the last
+    one for the same subject and reason, with the same figures, only updates
+    that row's hour — the history keeps when it started and that it is still
+    true, and spends one slot rather than all forty.
     """
     book = get_component("notebook")
     if book == None:
@@ -46,6 +55,15 @@ def note(loop, hour, subject, reason, detail=None):
         row["d"] = detail
 
     def append(rows):
+        for i in range(len(rows) - 1, -1, -1):
+            prior = rows[i]
+            if prior["s"] != subject:
+                continue                  # a different subject: look no further back
+            same = prior["why"] == reason and prior.get("d") == row.get("d")
+            if same:
+                prior["last_h"] = hour    # still true; do not spend a slot
+                return rows
+            break
         rows.append(row)
         if len(rows) > KEEP:
             return rows[len(rows) - KEEP:]

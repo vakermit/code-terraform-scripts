@@ -106,7 +106,7 @@ while True:
         target = last_good
         if target <= 0:
             target = sweet_spot()
-        say("oxygen: no fresh lease, holding " + str(round(target, 2)))
+        say("oxygen: no fresh lease, holding " + str(round(target)))
     else:
         target = sweet_spot() * allowed
         last_good = target
