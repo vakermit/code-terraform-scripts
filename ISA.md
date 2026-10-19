@@ -3,7 +3,7 @@ task: "Phase 3 — full base automation platform for Code: Terraform"
 slug: 20261019-150000_phase03-automation-platform
 project: code-terraform-game
 phase: climbing
-progress: 7/48
+progress: 13/48
 started: 2026-10-19T15:00:00Z
 updated: 2026-10-19T17:05:00Z
 principal_stated_goal: "then we will do a full rewrite for the next phase (3?)"
@@ -85,18 +85,18 @@ I leave the base for an hour of real time and come back to find it further along
 | --- | --- | --- | --- | --- | --- |
 | ISC-1 | bash | every phase03 script parses | 0 errors | `bash tools/check-syntax.sh scripts/phase03` | literal |
 | ISC-2 | bash | ct_sync resolves every save slot under phase03 | 0 unresolved | `python bin/ct_sync.py status --phase 3` | literal |
-| ISC-3 | bash | no phase03 script hard-codes a machine id | 0 matches | `bash tools/check-no-hardcoded-ids.sh` | derived: discovery-by-enumeration |
-| ISC-4 | bash | every component handle is None-checked before use | 0 unguarded | `bash tools/check-capability-probes.sh` | derived: capability-probing |
+| ISC-3 | bash | no phase03 script hard-codes a machine id | 0 matches | `bash tools/check-phase03.sh ids` | derived: discovery-by-enumeration |
+| ISC-4 | bash | no component handle is dereferenced inline | 0 matches | `bash tools/check-phase03.sh probes` | derived: capability-probing |
 | ISC-5 | manual | a second kernel start changes no state | 0 archive diffs | `start, snapshot keys, restart, compare` | derived: restart-idempotence |
 | ISC-6 | manual | kernel runs with the Data Archive absent | runs, logs degraded | `force notebook None, observe console` | derived: capability-probing |
 | ISC-7 | manual | kernel runs with the Signal Bus absent | every machine at fail-safe | `force comms None, observe machines` | derived: capability-probing |
 | ISC-8 | manual | a lease whose age is None is treated as stale | fail-safe fires | `save, reload, observe the restored broadcast` | derived: freshness |
-| ISC-9 | bash | no clear call is made with an empty prefix | 0 matches | `bash tools/check-no-wipe.sh` | derived: destructive-guard |
-| ISC-10 | bash | no self-only method is called through a remote handle | 0 matches | `bash tools/check-no-remote-actuation.sh` | derived: govern-not-drive |
+| ISC-9 | bash | no clear call is made with an empty prefix | 0 matches | `bash tools/check-phase03.sh wipe` | derived: destructive-guard |
+| ISC-10 | bash | no self-only method is called through a remote handle | 0 matches | `bash tools/check-phase03.sh actuation` | derived: govern-not-drive |
 | ISC-11 | manual | a water-fed Mk III generator throttles to its lease | throttle tracks lease | `set a lease by hand on the bus, read the throttle` | literal |
 | ISC-12 | manual | oxygen holds last good setpoint when kernel silent | no idle | `stop all automations, observe oxygen output` | derived: fail-safe-direction |
 | ISC-13 | manual | smelter idles when kernel silent | throttle 0 | `stop all automations, observe the smelter` | derived: fail-safe-direction |
-| ISC-14 | bash | FAIL_SAFE is declared in every machine script | 1 per script | `bash tools/check-fail-safe-declared.sh` | derived: fail-safe-direction |
+| ISC-14 | bash | FAIL_SAFE is declared in every machine script | 1 per script | `bash tools/check-phase03.sh fail-safe` | derived: fail-safe-direction |
 | ISC-15 | manual | the envelope names watts, tonnes and reserve | 3 fields present | `read the envelope broadcast` | literal |
 | ISC-16 | manual | one allocation dict is published per outpost | 1 per outpost | `list channels and count` | literal |
 | ISC-17 | manual | autonomy holds above the floor overnight | 0 brownouts, 0 dusk sheds | `run 24 world hours through a night, read the trace` | literal |
@@ -123,7 +123,7 @@ I leave the base for an hour of real time and come back to find it further along
 | ISC-37 | manual | the card renders state and issues no commands | 0 writes from the card | `read the card source, watch a full tick` | derived: cards-are-views |
 | ISC-38 | manual | each loop reaps its own prefix | 0 orphans after decommission | `decommission a machine, read archive keys` | derived: one-writer |
 | ISC-39 | manual | the Crop Automator queue head is policed | blocked head reordered | `block the head, observe the reorder` | literal |
-| ISC-40 | bash | no loop writes a key under another prefix | 0 cross-writes | `bash tools/check-prefix-ownership.sh` | derived: one-writer |
+| ISC-40 | bash | no loop writes a key under another prefix | 0 cross-writes | `bash tools/check-phase03.sh prefixes` | derived: one-writer |
 | ISC-42 | manual | an operator override survives a planner cadence | override held | `set an override, wait one full cadence` | derived: operator-first |
 | ISC-43 | manual | three events are handled unattended in one hour | all three handled | `play one hour hands-off, read the trace` | literal |
 | ISC-44 | manual | trace rows read as reasons a day later | operator judgement | `read forty rows cold, a day later` | derived: antecedent |
@@ -138,16 +138,16 @@ Why: the properties that must hold in every script, because each one is a way th
 
 - [x] ISC-1: Every script under `scripts/phase03/` parses clean.
 - [x] ISC-2: `ct_sync status --phase 3` resolves every save slot with no ambiguity.
-- [ ] ISC-3: No phase03 script contains a hard-coded machine id; all discovery is by enumeration.
-- [ ] ISC-4: Every component handle is probed for `None` before first use.
+- [x] ISC-3: No phase03 script contains a hard-coded machine id; all discovery is by enumeration.
+- [x] ISC-4: No component handle is dereferenced inline, so an unresearched or unknown id cannot raise an AttributeError.
 - [ ] ISC-5: Each loop reloads its full state from the Archive on start, and a second start changes nothing.
 - [ ] ISC-6: The kernel runs with the Data Archive absent, logging a degraded mode rather than raising.
 - [ ] ISC-7: The kernel runs with the Signal Bus absent, holding every machine at its declared fail-safe.
 - [ ] ISC-8: Anti: no freshness check treats a `None` broadcast age as fresh.
-- [ ] ISC-9: Anti: no script clears a marker or archive family with an empty prefix.
-- [ ] ISC-10: Anti: no kernel loop invokes a self-only method through a remote handle.
+- [x] ISC-9: Anti: no script clears a marker or archive family with an empty prefix.
+- [x] ISC-10: Anti: no kernel loop invokes a self-only method through a remote handle.
 - [ ] ISC-38: Each loop reaps its own Archive prefix against a fresh enumeration.
-- [ ] ISC-40: Anti: no loop writes a key under another loop's prefix.
+- [x] ISC-40: Anti: no loop writes a key under another loop's prefix.
 - [ ] ISC-43: The base handles a brownout threat, a dormant well and a storm window across one unattended hour.
 - [ ] ISC-41: [DROPPED - duplicate of ISC-10; see Decisions 2026-10-19]
 
@@ -157,7 +157,7 @@ Why: it proves the whole stack on a single path before any of it is widened, so 
 - [ ] ISC-11: A water-fed Mk III generator throttles to the water figure in its lease.
 - [ ] ISC-12: The oxygen generator holds its last good setpoint when no fresh lease exists.
 - [ ] ISC-13: The smelter idles when no fresh lease exists.
-- [ ] ISC-14: `FAIL_SAFE` is declared in each machine script, not supplied by the kernel.
+- [x] ISC-14: `FAIL_SAFE` is declared in each machine script, not supplied by the kernel.
 - [x] ISC-15: The safety loop publishes an envelope naming free watts, free tonnes and the reserve floor.
 - [x] ISC-16: The planner publishes per-outpost allocation dicts keyed by machine id, one broadcast per outpost.
 
@@ -233,6 +233,7 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: The six structural probes became one `tools/check-phase03.sh` with named subcommands rather than six near-identical scripts, and each was mutation-tested before being trusted: a violation injected, the check confirmed red, the tree restored. A probe that has never been red is not evidence, and all six were green on first run.
 - 2026-10-19: The lease path is proven end to end. With the kernel running, `o2gen_1` printed `fully supplied` and `smelter_1` printed `leased, running` — a machine's behaviour changed because of a broadcast allowance, which is the whole premise of the architecture. The autonomy fix also showed its work: 27.7 hours of storage against the deficit, so safety held where the previous build wanted to shed at 6.08 W.
 - 2026-10-19: An unmeasured fluid fails open. A fluid absent from the envelope means safety could not measure it, which the planner now distinguishes from a measured zero: it grants the full want and says so in the trace. Starving every machine that needs a fluid because the reading failed is the worse of the two mistakes, and a machine below the tier that consumes it ignores the grant anyway.
 - 2026-10-19: Safety never sheds a machine whose rated draw is zero. The first run rehearsed shedding two machines at `w: 0`, which frees nothing and buys only a dark machine; an idle machine reports no draw and a type never seen busy is absent from the wattage table, so this is the common case early rather than an edge.
@@ -293,11 +294,11 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - ISC-18: `safety.watts` learned temp_heater 2 then 6, oxygen_generator 8, pressure_generator 35 across two runs.
 - ISC-36: `safety.trace` and `plan.trace` are separate Archive keys, each bounded, wseq 2093.
 - ISC-49: `smelter_1` and `fabricator_2` appear in the allocation with a bare `run` grant, wseq 2093.
+- ISC-3, ISC-4, ISC-9, ISC-10, ISC-14, ISC-40: `tools/check-phase03.sh` all green, and each check verified red against an injected violation (6 of 6 caught) before being trusted. ISC-40's probe exempts `trace.py`, which writes a parameterised key its caller supplies.
 
 ## Remaining Work
 
 - [ ] Create one Automation in game and record how it appears on disk — blocks the kernel's deployment path and is currently fog.
 - [ ] Explicit slot mapping in `ct_sync` for cards and automations — delegated to its own session, since several `panel_N` slots currently collapse to one base name.
 - [ ] ISC-11 cannot be verified on this base: every generator is tier 1, so no machine consumes water and the lease has nothing to throttle. It needs a Mk III pack installed before the claim means anything. Left as an open claim rather than a fog entry, because the question is precisely stated and the falsifier is nameable; only the hardware is missing.
-- [ ] Write the five unwritten `tools/check-*.sh` probes that F0 claims already name — no-hardcoded-ids, capability-probes, fail-safe-declared, no-remote-actuation, no-wipe, prefix-ownership. ISC-1's probe exists and is green; the rest are named in Test Strategy but have no script yet, so those claims cannot go red-before-build until they do.
 - [ ] Decide whether the Steam Condenser changes the water allocation problem enough to re-rank — gated behind 1,000,000 Plants, far outside this run.
