@@ -1,10 +1,14 @@
 # build_docs — extract the game's Python documentation
 
-Code: Terraform ships as a single Tauri executable with every asset embedded inside it,
-brotli-compressed. Among those assets is the frontend JavaScript, and inside *that* are
-the registries the in-game DOCS panel and editor autocomplete read from: every component,
-method, parameter, return value, raised exception, manual page and training lesson.
-`build_docs.py` pulls them out and writes a browsable Markdown bundle.
+Code: Terraform is an Electron app whose frontend sits on disk under
+`resources/app/dist/assets/`. Inside that JavaScript are the registries the in-game DOCS
+panel and editor autocomplete read from: every component, method, parameter, return
+value, raised exception, manual page and training lesson. `build_docs.py` pulls them out
+and writes a browsable Markdown bundle.
+
+Builds up to the 2026-10-16 patch were Tauri instead, with every asset brotli-compressed
+inside the executable. Both are still read: the two readers meet at `read_assets()` and
+produce the same `{asset path: bytes}` map, so an older install still extracts.
 
 ```bash
 python tools/build_docs.py "<game install folder>" <output folder>
@@ -64,9 +68,17 @@ the private one and clones cleanly for anyone.
 Everything is located by **content**, never by file name, minified variable name or byte
 offset — all of which change on every rebuild of the game:
 
-- The embedded-asset table is found by anchoring on a path every Tauri frontend has
-  (`/index.html`), locating the pointer to it, and growing a window around that record
-  until no more records appear at the edges.
+- The frontend is read from `resources/app/` when that directory exists. Failing that
+  (a Tauri build), the embedded-asset table is found by anchoring on a path every Tauri
+  frontend has (`/index.html`), locating the pointer to it, and growing a window around
+  that record until no more records appear at the edges.
+- The freshness fingerprint hashes the executable *and*, on an Electron build, every
+  frontend file — a patch there can rewrite the bundle without touching the exe, and
+  `--check` would otherwise call stale docs current.
+- Manual pages are numbered in reading order, so a build that inserts one renumbers
+  every slug after it. A page the current build no longer has is deleted, or the bundle
+  would keep a copy under both numbers with nothing to say which is live. `--no-prune`
+  keeps them.
 - Each registry is found by a stable English id in its first entry — `{typeName:'Component'}`,
   `{id:'getting_started'}`, `{name:'print'}` — searched across every JS chunk, since the
   retail build splits the frontend into ~40 of them.

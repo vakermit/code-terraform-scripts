@@ -45,11 +45,24 @@ PROVENANCE = ".extracted-from.json"
 
 # ----------------------------------------------------------------- provenance
 def fingerprint(exe_path, game_dir):
-    """Identify the binary these docs came from — enough to know when to re-extract."""
+    """Identify the build these docs came from — enough to know when to re-extract.
+
+    Older builds packed every asset into the executable, so its hash was the whole
+    story. Electron builds keep the frontend in `resources/app/` on disk, where a
+    patch can rewrite the bundle without touching the exe at all — so when that tree
+    is present the hash covers it too, or `--check` would call stale docs current.
+    """
     h = hashlib.sha256()
     with open(exe_path, "rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
             h.update(block)
+    app = app_dir(game_dir)
+    if app:
+        for path in sorted(disk_asset_files(app)):
+            h.update(os.path.relpath(path, app).replace(os.sep, "/").encode("utf-8"))
+            with open(path, "rb") as f:
+                for block in iter(lambda: f.read(1 << 20), b""):
+                    h.update(block)
     st = os.stat(exe_path)
     release = None
     rel_file = os.path.join(game_dir, ".from-release")
@@ -64,6 +77,7 @@ def fingerprint(exe_path, game_dir):
         "modified": datetime.fromtimestamp(st.st_mtime, timezone.utc)
                             .replace(microsecond=0).isoformat(),
         "release": release,
+        "packaging": "electron" if app else "embedded",
     }
 
 
@@ -101,6 +115,39 @@ def report_freshness(args, source, previous, unchanged):
     return 1
 
 
+def prune(args, written):
+    """Delete Markdown this run did not write, so the bundle equals the build.
+
+    The manual pages are numbered in reading order, so a build that inserts a page
+    renumbers every slug after it: `08-power-and-terraforming-machines.md` becomes
+    `09-...`. Without pruning, both survive and nothing says which one is current —
+    the bundle grows a layer of silt from every past build. Only `.md` under the
+    directories this tool writes is considered, so notes of your own are safe
+    anywhere else, and `--no-prune` keeps everything.
+    """
+    if getattr(args, "no_prune", False):
+        return
+    managed = {rel.split("/")[0] for rel in written if "/" in rel}
+    stale = []
+    for root, dirs, names in os.walk(args.out_dir):
+        dirs[:] = [d for d in dirs if d != ".git"]
+        for name in names:
+            if not name.endswith(".md"):
+                continue
+            rel = os.path.relpath(os.path.join(root, name),
+                                  args.out_dir).replace(os.sep, "/")
+            top = rel.split("/")[0] if "/" in rel else None
+            if rel in written or top not in managed:
+                continue
+            stale.append(rel)
+    if not stale:
+        return
+    print("  pruning %d page(s) this build no longer has:" % len(stale))
+    for rel in sorted(stale):
+        print("    - %s" % rel)
+        os.remove(os.path.join(args.out_dir, rel))
+
+
 def read_provenance(out_dir):
     try:
         with open(os.path.join(out_dir, PROVENANCE), encoding="utf-8") as f:
@@ -110,7 +157,55 @@ def read_provenance(out_dir):
 
 
 # --------------------------------------------------------------------- assets
-def read_assets(exe_path):
+# The game has shipped two ways. Tauri builds packed the whole frontend into the
+# executable as brotli-compressed embedded assets. Electron builds (retail, from the
+# 2026-10-16 patch) leave it on disk under `resources/app/`. Either way what this
+# script wants is the same {asset path: bytes} map of the frontend, so the two readers
+# meet at `read_assets` and nothing downstream knows which one ran.
+APP_SUBDIR = os.path.join("resources", "app")
+ASSET_EXTS = (".js", ".mjs", ".json", ".css", ".html", ".txt", ".md")
+
+
+def app_dir(game_dir):
+    """`resources/app/` if this is an Electron build, else None."""
+    path = os.path.join(game_dir, APP_SUBDIR)
+    return path if os.path.isdir(path) else None
+
+
+def disk_asset_files(app):
+    """Every frontend file worth hashing or parsing — code and data, not media."""
+    for root, _, names in os.walk(app):
+        for name in names:
+            if name.lower().endswith(ASSET_EXTS):
+                yield os.path.join(root, name)
+
+
+def read_disk_assets(app):
+    """Return {asset path: bytes} from an unpacked Electron frontend.
+
+    Keys are made to look like the embedded ones (`/assets/main-BxI8dNtc.js`), rooted
+    at `dist/` when there is one, so registry lookups and the verbatim-stub pass that
+    match on key shape keep working across both packagings.
+    """
+    dist = os.path.join(app, "dist")
+    base = dist if os.path.isdir(dist) else app
+    out = {}
+    for path in sorted(disk_asset_files(app)):
+        rel = os.path.relpath(path, base).replace(os.sep, "/")
+        with open(path, "rb") as f:
+            out["/" + rel.lstrip("./")] = f.read()
+    return out
+
+
+def read_assets(exe_path, game_dir=None):
+    """Return {asset path: bytes} for the frontend, whichever way the game ships it."""
+    app = app_dir(game_dir or os.path.dirname(exe_path))
+    if app:
+        return read_disk_assets(app)
+    return read_embedded_assets(exe_path)
+
+
+def read_embedded_assets(exe_path):
     """Return {asset path: bytes} from the Tauri embedded-asset table.
 
     The table is an array of 32-byte `(key_ptr, key_len, value_ptr, value_len)`
@@ -444,6 +539,9 @@ def main():
     ap.add_argument("out_dir")
     ap.add_argument("--dump-assets", metavar="DIR",
                     help="also write every decompressed asset here (large: includes audio)")
+    ap.add_argument("--no-prune", action="store_true",
+                    help="keep Markdown pages this build no longer has (by default a "
+                         "page that vanished or was renumbered is deleted)")
     ap.add_argument("--check", action="store_true",
                     help="report whether out_dir was built from the current game binary "
                          "and exit, without extracting. Exit 0 when current, 1 when a "
@@ -469,8 +567,8 @@ def main():
     if unchanged:
         print("  game binary unchanged since the last extract (%s)"
               % previous.get("extracted_at", "?"))
-    assets = read_assets(exe)
-    print("  %d embedded assets" % len(assets))
+    assets = read_assets(exe, args.game_dir)
+    print("  %d %s assets" % (len(assets), source["packaging"]))
     if args.dump_assets:
         for key, blob in assets.items():
             p = os.path.join(args.dump_assets, key.lstrip("/"))
@@ -481,10 +579,13 @@ def main():
     corpus = Corpus(assets)
     print("  %d JS chunks" % len(corpus.chunks))
 
+    written = set()
+
     def write(rel, text):
         dest = os.path.join(args.out_dir, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         io.open(dest, "w", encoding="utf-8", newline="\n").write(text)
+        written.add(os.path.normpath(rel).replace(os.sep, "/"))
 
     reg, home = {}, {}
     for label, pat in PATTERNS.items():
@@ -874,7 +975,7 @@ def main():
     # -- provenance ---------------------------------------------------------
     # The docs are derived from someone else's binary, so record exactly which one:
     # enough to tell at a glance whether a game update warrants a re-extract.
-    source["embedded_assets"] = len(assets)
+    source["assets"] = len(assets)
     provenance = {
         "schema": 1,
         "game": source,
@@ -892,6 +993,8 @@ def main():
         ("File modified", source["modified"]),
         ("Extracted", provenance["extracted_at"]),
     ])
+
+    prune(args, written)
 
     write("README.md",
           "# Code: Terraform \u2014 Python Documentation\n\n"
