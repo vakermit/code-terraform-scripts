@@ -24,7 +24,9 @@
 
 from bus import lease
 from capability import outpost_of
-from store import sink_for, source_for, stock_of   # inherited from phase02/lib
+# Inherited from phase02/lib via the phase fallback chain: these helpers are
+# not phase-specific and there was nothing to rewrite in them.
+from store import ensure_ports, push, stock_of
 
 FAIL_SAFE = "idle"           # kernel silent -> stop consuming
 PASS_S = 2.0
@@ -58,15 +60,14 @@ def permitted():
 
 
 def drain():
-    """Move finished goods out, so a blocked output never masks an idle lease."""
+    """Move finished goods out, so a blocked output never masks an idle lease.
+
+    `push` re-aims the port at a fresh sink after each partial send, because a
+    stack larger than one bin needs more than one destination to land in.
+    """
     moved = 0
     for stack in self.output.stacks():
-        target = sink_for(stack.id)
-        if target == None:
-            continue
-        result = self.output.send(stack.id, stack.count)
-        if result != None:
-            moved = moved + result.moved
+        moved = moved + push(self.output, stack, "smelter")
     return moved
 
 
@@ -83,9 +84,6 @@ def feed():
         have = stock_of(ore)
         if have <= 0:
             continue
-        source = source_for(ore)
-        if source == None:
-            continue
         result = self.input.take(ore, min(want, have))
         if result != None and result.moved > 0:
             return result.moved
@@ -93,6 +91,12 @@ def feed():
 
 
 while True:
+    # Nothing moves until both ports are aimed, and a port can be moved out
+    # from under us by hand, so this is checked every pass rather than once.
+    if not ensure_ports(self, tag="smelter"):
+        sleep(PASS_S)
+        continue
+
     drain()                              # always: a full output helps no one
 
     if permitted():

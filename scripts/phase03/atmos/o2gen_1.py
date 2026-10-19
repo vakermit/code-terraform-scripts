@@ -110,7 +110,13 @@ while True:
     self.set_intake(target)
 
     if self.is_degraded():
-        say("oxygen: degraded, water_in at " + str(self.water_in.level()) +
-            " t, tier " + str(self.effective_tier()))
+        # water_in is installed by the Mk III pack, so a lower-tier machine
+        # may not have the port at all. is_degraded() should be False there,
+        # but this is life support and a guess is not worth an exception.
+        where = "unknown"
+        if self.water_in != None:
+            where = str(self.water_in.level()) + " t"
+        say("oxygen: degraded, water_in " + where +
+            ", tier " + str(self.effective_tier()))
 
     sleep(PASS_S)
