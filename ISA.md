@@ -2,10 +2,10 @@
 task: "Phase 3 — full base automation platform for Code: Terraform"
 slug: 20261019-150000_phase03-automation-platform
 project: code-terraform-game
-phase: scoping
-progress: 0/48
+phase: climbing
+progress: 2/48
 started: 2026-10-19T15:00:00Z
-updated: 2026-10-19T15:00:00Z
+updated: 2026-10-19T16:40:00Z
 principal_stated_goal: "then we will do a full rewrite for the next phase (3?)"
 principal_stated_goal_source: conversation
 principal_stated_goal_signal: 4
@@ -137,8 +137,8 @@ I leave the base for an hour of real time and come back to find it further along
 ### F0 · Cross-cutting
 Why: the properties that must hold in every script, because each one is a way the whole platform fails silently rather than loudly.
 
-- [ ] ISC-1: Every script under `scripts/phase03/` parses clean.
-- [ ] ISC-2: `ct_sync status --phase 3` resolves every save slot with no ambiguity.
+- [x] ISC-1: Every script under `scripts/phase03/` parses clean.
+- [x] ISC-2: `ct_sync status --phase 3` resolves every save slot with no ambiguity.
 - [ ] ISC-3: No phase03 script contains a hard-coded machine id; all discovery is by enumeration.
 - [ ] ISC-4: Every component handle is probed for `None` before first use.
 - [ ] ISC-5: Each loop reloads its full state from the Archive on start, and a second start changes nothing.
@@ -234,6 +234,8 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: Safety ships with its breaker disarmed (`ENFORCE = False`), printing what it would shed rather than shedding. The first pass runs on an empty wattage table and reads the base from live draw alone, so on a base near capacity it could shed within seconds of starting, against the crude fallback order because no planner is ranking yet. A loop that can switch a base off earns a rehearsal.
+- 2026-10-19: Safety restores only machines recorded in its own shed ledger, persisted as `safety.shed`. Restoring every unpowered machine would have overridden the operator's own power-offs, which Principles forbids, and an unpersisted ledger would leave shed machines dark forever after a reload.
 - 2026-10-19: The wattage table is a high-water mark per machine type rather than a live reading. A grid member's consumed figure is documented as 0 W for a powered-off or idle machine, so the live reading cannot say what a machine would draw once it starts, which is the only figure headroom needs.
 - 2026-10-19: ISC-41 dropped as a duplicate of ISC-10; both asserted that no remote actuation call appears in phase03. Tombstoned rather than renumbered, per ID stability.
 - 2026-10-19: F7 and F8 re-homed. Archive hygiene (ISC-38, ISC-40) and the unattended-hour acceptance claim (ISC-43) were misfiled under biosphere and deployment; they are cross-cutting. ISC-45 to ISC-48 added so both features carry claims of their own subject.
@@ -265,8 +267,12 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 
 <!-- One-line provenance stubs only; the proof lives in git and in the save. -->
 
+- ISC-1: `tools/check-syntax.sh scripts/phase03` green at a570daf.
+- ISC-2: `ct_sync phases --phase 3` reports 41 of 41 resolved, no ambiguity, at a570daf.
+
 ## Remaining Work
 
 - [ ] Create one Automation in game and record how it appears on disk — blocks the kernel's deployment path and is currently fog.
 - [ ] Explicit slot mapping in `ct_sync` for cards and automations — delegated to its own session, since several `panel_N` slots currently collapse to one base name.
+- [ ] Write the five unwritten `tools/check-*.sh` probes that F0 claims already name — no-hardcoded-ids, capability-probes, fail-safe-declared, no-remote-actuation, no-wipe, prefix-ownership. ISC-1's probe exists and is green; the rest are named in Test Strategy but have no script yet, so those claims cannot go red-before-build until they do.
 - [ ] Decide whether the Steam Condenser changes the water allocation problem enough to re-rank — gated behind 1,000,000 Plants, far outside this run.
