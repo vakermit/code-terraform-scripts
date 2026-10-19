@@ -19,6 +19,14 @@ already waiting for it.
 Matching ignores a trailing `_<number>`, so `scripts/bio/bio_lab_1.py` fills the
 save's `bio_lab_1.py`, `bio_lab_2.py`, and so on.
 
+Control Room cards break that rule. The game names a card by its *position* --
+`panel_1.py`, `panel_2.py` — so every card collapses to the base `panel` and one
+repo file would fill them all. Those slots are named explicitly in
+`scripts/<phase>/slots.toml` (`panel_1 = "phase02/control_room/controller.py"`),
+which skips matching altogether and never renumbers. Maps fall back down the phase
+chain per entry, like everything else. The save's own `codeterraform-scripts.json`
+is read to cross-check the map and is never written.
+
 The tree is organised by *phase* of the playthrough: `scripts/phase02/power/solar_1.py`.
 The phase being played is decided by `--phase`, else `scripts/.current` (git-ignored,
 one line, `ct_sync.py use p3` writes it), else the highest phase present. A script the
@@ -54,10 +62,12 @@ Only top-level `.py` files are touched. `.pyi` stubs, `.json`, `user_stubs.py`, 
 file that already contains code is never overwritten.
 """
 import ast
+import json
 import os
 import re
 import shutil
 import time
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -86,6 +96,10 @@ SKIP_PATTERNS = (re.compile(r"\.codeterraform-retired-"),)
 TRAILING_INDEX = re.compile(r"_\d+$")
 DEFAULT_MAGIC = "xyz"               # game file -> filled from the repo
 DEFAULT_PULL = "zyx"                # game file -> copied back into the repo
+SLOTS = "slots.toml"                # scripts/<phase>/slots.toml: explicit slot -> script
+SLOT_TABLE = "slots"                # the one table in it that is implemented
+AUTOMATION_TABLE = "automations"    # reserved; see "the automation seam" below
+MANIFEST = "codeterraform-scripts.json"     # the game's own slot register. Read only.
 
 app = typer.Typer(add_completion=False, help=__doc__)
 
@@ -104,6 +118,7 @@ class Options:
     phase_how: str = ""                 # where that came from, for reporting
     phases: tuple = ()                  # every phase present in the tree, ascending
     phase_arg: str = ""                 # --phase as given, so a re-resolve keeps it
+    slot_map: Optional["SlotMap"] = None    # slots named explicitly, per phase
 
     @property
     def unmatched_dir(self) -> Path:
@@ -113,6 +128,11 @@ class Options:
     def chain(self) -> tuple:
         """Lookup order for the active phase: itself, earlier phases, then common."""
         return phase_chain(self.phase, self.phases)
+
+    @property
+    def slots(self) -> "SlotMap":
+        """The slot map, or an empty one — callers should not have to check."""
+        return self.slot_map if self.slot_map is not None else SlotMap({}, [])
 
 
 def show(path: Path) -> str:
@@ -300,6 +320,195 @@ def resolve_phase(scripts_dir: Path, override: str):
     return None, "no phases in tree", phases
 
 
+# ------------------------------------------------------------------- slot map
+# Inference works for a machine because the game names a machine slot after its
+# type: `solar_7.py` is the seventh solar panel, and one `solar_1.py` in the repo
+# is the right script for all of them. Control Room cards are not named that way.
+# The game numbers them by *position* — `panel_1.py`, `panel_2.py` — so the type
+# is nowhere in the name and every card collapses to the base `panel`. Inference
+# would fill every card from one file and rewrite ids inside the wrong card.
+#
+# A card is therefore named explicitly, in `scripts/<phase>/slots.toml`:
+#
+#     [slots]
+#     panel_1 = "phase02/control_room/controller.py"
+#     panel_2 = "phase02/control_room/fleet_card.py"
+#
+# The key is the save file without `.py` — the slot id the game picked. The value
+# is a path from the root of the scripts tree, which is the one rule that needs no
+# qualification: it names exactly one file, in any phase or in `common/`. A mapped
+# slot skips inference entirely and is never renumbered, because the `2` in
+# `panel_2` is a position in the Control Room and not machine instance 2.
+#
+#                        ---- the automation seam ----
+#
+# Phase 3 adds Automations: base-wide scripts belonging to no machine. They are
+# the other half of this problem and will be named the same way, but how an
+# automation appears on disk is *not known*. The live save carries
+# `context.automations` in `codeterraform-workspace.json` and it is `{}` — no
+# automation has ever existed in it, so whether one gets a file in the
+# external-editor directory at all, what that file is named, and whether the
+# manifest lists it as kind "script" are all unverified. Nothing here guesses.
+# `[automations]` is reserved in `slots.toml` so the name cannot be taken by
+# something else, and a map that uses it is told, once, that it does nothing yet.
+# When the shape is known it becomes a second table read by `load_slot_maps` and
+# a second lookup in `SlotMap.resolve`; nothing else below should need to move.
+
+
+@dataclass
+class SlotEntry:
+    """One `slot = "path"` line, and where it came from."""
+    slot: str
+    rel: str                            # as written, relative to the scripts tree
+    path: Path                          # resolved
+    phase: Optional[int]                # the phase whose slots.toml declared it
+    source: Path                        # that slots.toml, for error messages
+
+
+class SlotMap:
+    """Every `slots.toml` in the tree, keyed by the phase that declares it.
+
+    Entries fall back exactly as scripts do, but per *entry*: the active phase's
+    line for `panel_1` wins, and a slot only an earlier phase names is inherited.
+    So `phase03/slots.toml` repoints the two cards phase 3 has rewritten and the
+    rest keep coming from phase 2 — the same incremental story as the scripts.
+    """
+
+    def __init__(self, by_phase: dict, problems: list):
+        self.by_phase = by_phase        # phase (None = common/) -> {slot: SlotEntry}
+        self.problems = problems        # bad lines and unreadable files: reported, not raised
+
+    def __len__(self):
+        return sum(len(v) for v in self.by_phase.values())
+
+    def declared(self, slot: str) -> bool:
+        """Is this slot named by *any* phase's map?
+
+        Deliberately not "by the active chain". Naming a slot anywhere says its
+        name means nothing to inference, so a slot mapped only by phase 3 must not
+        be quietly served by base name while phase 2 is playing. `resolve` then
+        says why it did not resolve, which is the useful thing to hear.
+        """
+        return any(slot in v for v in self.by_phase.values())
+
+    def declaring(self, slot: str) -> list:
+        """Phases whose map names this slot, oldest first, common last."""
+        return sorted((n for n, v in self.by_phase.items() if slot in v),
+                      key=lambda k: (k is None, k))
+
+    def entries(self, opts: "Options") -> dict:
+        """Slot -> entry as the phase being played sees it."""
+        out = {}
+        for n in reversed(opts.chain):          # oldest first, so the newest overwrites
+            out.update(self.by_phase.get(n, {}))
+        return out
+
+    def resolve(self, slot: str, want: Optional[int], opts: "Options",
+                must_exist: bool = True):
+        """Pick the script for a mapped slot. Returns (path, how) or (None, why).
+
+        `want` is a marker's phase (`xyz p1`), and is exact here in the same way it
+        is exact for scripts: it names *that* phase's map, with no falling back,
+        because being served another phase's card would defeat the asking.
+
+        `must_exist` is False for a pull, where the mapped file is the thing about
+        to be created: "map it, then `zyx` the card out of the game" should work.
+        """
+        def found(entry, how):
+            if must_exist and not entry.path.is_file():
+                return None, "%s maps %s to %s, which is not there" % (
+                    show(entry.source), slot, show(entry.path))
+            return entry.path, how
+
+        if want is not None:
+            entry = self.by_phase.get(want, {}).get(slot)
+            if entry is not None:
+                return found(entry, "%s %s (marker)" % (SLOTS, phase_label(want)))
+            return None, "no %s entry for %s in %s (mapped in %s)" % (
+                SLOTS, slot, phase_label(want),
+                ", ".join(phase_label(n) for n in self.declaring(slot)))
+
+        for n in opts.chain:
+            entry = self.by_phase.get(n, {}).get(slot)
+            if entry is None:
+                continue
+            how = "%s %s" % (SLOTS, phase_label(n))
+            if n != opts.phase:
+                how += " (inherited)"
+            return found(entry, how)
+        return None, "%s is mapped in %s, not in %s" % (
+            slot, ", ".join(phase_label(n) for n in self.declaring(slot)),
+            phase_label(opts.phase))
+
+
+def load_slot_maps(scripts_dir: Path) -> SlotMap:
+    """Read `slots.toml` from every phase, and from `common/`.
+
+    TOML because the map is hand-written and wants comments beside the entries --
+    which card is which is exactly the thing you forget — and because Python has
+    had a parser in the standard library since 3.11, so a declarative file with a
+    real grammar costs no dependency. A table also leaves somewhere for
+    `[automations]` to go without the file's shape changing.
+
+    Nothing here raises. A map that cannot be read, or has a line that is not a
+    path, is collected into `problems` and reported; the slots that are fine still
+    sync. A map is a convenience, and a typo in one should not stop a playthrough.
+    """
+    by_phase, problems = {}, []
+    for n in (None,) + discover_phases(scripts_dir):
+        directory = phase_dir(scripts_dir, n)
+        if directory is None:
+            continue
+        path = directory / SLOTS
+        if not path.is_file():
+            continue
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            problems.append("%s: cannot read (%s)" % (show(path), exc))
+            continue
+        except tomllib.TOMLDecodeError as exc:
+            problems.append("%s: not valid TOML (%s)" % (show(path), exc))
+            continue
+        for key in sorted(data):
+            if key == SLOT_TABLE:
+                continue
+            if key == AUTOMATION_TABLE:
+                problems.append("%s: [%s] is reserved and does nothing yet -- how an "
+                                "automation appears on disk is unverified"
+                                % (show(path), AUTOMATION_TABLE))
+            else:
+                problems.append("%s: unknown section [%s], ignored" % (show(path), key))
+        table = data.get(SLOT_TABLE) or {}
+        if not isinstance(table, dict):
+            problems.append('%s: [%s] must be a table of slot = "path" lines'
+                            % (show(path), SLOT_TABLE))
+            continue
+        entries = {}
+        for raw, rel in table.items():
+            slot = raw[:-3] if raw.endswith(".py") else raw    # `panel_1.py` also fine
+            if not isinstance(rel, str) or not rel.strip():
+                problems.append("%s: %s must be a path, got %r" % (show(path), slot, rel))
+                continue
+            rel = rel.strip().replace("\\", "/")
+            target = scripts_dir / rel
+            try:
+                target.resolve().relative_to(scripts_dir.resolve())
+            except ValueError:
+                problems.append("%s: %s -> %r points outside %s"
+                                % (show(path), slot, rel, show(scripts_dir)))
+                continue
+            entries[slot] = SlotEntry(slot, rel, target, n, path)
+        if entries:
+            by_phase[n] = entries
+    return SlotMap(by_phase, problems)
+
+
+def report_slot_problems(slot_map: SlotMap) -> None:
+    for line in slot_map.problems:
+        warn("  %s" % line)
+
+
 # -------------------------------------------------------------------- grouping
 @dataclass
 class Group:
@@ -479,6 +688,170 @@ def read(path: Path) -> Optional[str]:
         return None
 
 
+# -------------------------------------------------------------------- manifest
+# `codeterraform-scripts.json` is the game's own register of what each slot is:
+# an entry per script and per library, keyed `script:panel_1` / `library:store`,
+# each naming a canonical file name, a kind, and content hashes. It is the only
+# place on disk that states which slots exist, which makes it the right thing to
+# check a hand-written map against.
+#
+# It is read and never written. The game rewrites it whenever the save changes,
+# and a sync that edited it would be writing over whatever the game had just
+# decided. It is advisory for the same reason: it belongs to the game, it can be
+# absent (a fresh save), half-written (we caught it mid-save), or a version whose
+# shape we have not seen — so every check below degrades to silence, and a sync
+# never stops because of it.
+
+
+@dataclass
+class Manifest:
+    """The slots the game says this save has."""
+    path: Path
+    scripts: dict                       # slot id (file stem) -> manifest entry id
+    libraries: dict                     # lib file name -> manifest entry id
+    abandoned: dict                     # file stem -> the id that used to own it
+
+
+def read_manifest(save_dir: Path):
+    """Parse the save's script register, or return None. Never raises, never writes."""
+    path = save_dir / MANIFEST
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), dict):
+        return None
+    scripts, libraries = {}, {}
+    for entry in data["entries"].values():
+        if not isinstance(entry, dict):
+            continue
+        canonical = entry.get("canonical")
+        ident = entry.get("id")
+        if not isinstance(canonical, str):
+            continue
+        name = Path(canonical)
+        if entry.get("kind") == "script":
+            # The stem, not the id: `script:contract_relay_hack` is the file
+            # `relay_hack.py`, and the file name is what a slot map keys on.
+            scripts[name.stem] = ident if isinstance(ident, str) else name.stem
+        elif entry.get("kind") == "library":
+            libraries[name.name] = ident if isinstance(ident, str) else name.stem
+    abandoned = {}
+    for gone in data.get("abandonedPaths") or []:
+        if isinstance(gone, dict) and isinstance(gone.get("path"), str):
+            owner = (gone.get("previousOwner") or {}).get("id")
+            abandoned[Path(gone["path"]).stem] = owner if isinstance(owner, str) else "?"
+    return Manifest(path, scripts, libraries, abandoned)
+
+
+def check_map_against_manifest(manifest, opts: "Options") -> None:
+    """Warn about map entries the game does not have a slot for.
+
+    A slot id is a thing the game chose, so a map entry is only ever as good as
+    your typing. Retired slots are called out separately: the game remembers them
+    in `abandonedPaths`, and a card you deleted in game is a different mistake
+    from a card you misspelled.
+    """
+    if manifest is None:
+        return
+    for slot in sorted(opts.slots.entries(opts)):
+        if slot in manifest.scripts:
+            continue
+        if slot in manifest.abandoned:
+            warn("  %-24s mapped, but %s has retired that slot" % (slot, MANIFEST))
+        else:
+            warn("  %-24s mapped, but %s has no such slot" % (slot, MANIFEST))
+
+
+def check_manifest_coverage(manifest, index, opts: "Options") -> None:
+    """Warn about slots the game has that this repo cannot fill either way."""
+    if manifest is None:
+        return
+    for slot in sorted(manifest.scripts):
+        if opts.slots.declared(slot):
+            continue                      # mapped; any trouble with it is reported there
+        group = index.get(base_name(slot))
+        if group is not None and group.select(None, opts)[0] is not None:
+            continue
+        warn("  %-24s is a slot in %s with no %s entry and no name match in %s"
+             % (slot, MANIFEST, SLOTS, show(opts.scripts_dir)))
+
+
+# ------------------------------------------------------------------- ambiguity
+def normalised(text: str, stem: str) -> str:
+    """The file with its own slot id blanked, so two slots can be compared.
+
+    `pioneer_1.py` and `pioneer_2.py` hold the same script with one id rewritten,
+    and that is the whole difference between them. Blank the id and they are
+    identical — which is how a machine family can be told apart from a set of
+    distinct cards that merely share a prefix.
+    """
+    return re.sub(r"(?<![0-9A-Za-z_])" + re.escape(stem) + r"(?![0-9A-Za-z_])",
+                  base_name(stem) + "_N", text)
+
+
+def slot_families(index, opts: "Options") -> list:
+    """Save slots that share a base name. Returns (base, slots, source, verdict).
+
+    `verdict` is why this family is or is not a problem:
+
+    * `ok`        every slot holds the same script, so one repo file is right for
+                  all of them — thirteen solar panels, which is what inference is
+                  for and must keep working untouched.
+    * `differ`    two slots hold scripts that are *not* the same once each one's
+                  own id is blanked. They are different scripts under one base
+                  name, so filling them from one file would overwrite a card with
+                  another card. Map them.
+    * `nosource`  nothing in the tree matches the base at all, so inference can
+                  never serve these slots whatever happens. Map them.
+
+    Mapped slots are left out: naming a slot is the answer to this question.
+    """
+    groups = {}
+    for path in sorted(opts.save_dir.glob("*.py")):
+        if not is_candidate(path, opts.save_dir) or opts.slots.declared(path.stem):
+            continue
+        groups.setdefault(base_name(path.stem), []).append(path)
+
+    out = []
+    for base, paths in sorted(groups.items()):
+        if len(paths) < 2:
+            continue
+        group = index.get(base)
+        source = group.select(None, opts)[0] if group else None
+        shapes = set()
+        for path in paths:
+            text = read(path)
+            if text is None or is_empty(text, strict=False):
+                continue                  # an empty slot is evidence of nothing
+            shapes.add(normalised(text, path.stem))
+        verdict = "nosource" if source is None else ("differ" if len(shapes) > 1 else "ok")
+        out.append((base, [q.name for q in paths], source, verdict))
+    return out
+
+
+def report_slot_families(index, opts: "Options") -> None:
+    """One line per shared base name, loud for the two shapes that are wrong."""
+    families = slot_families(index, opts)
+    if not families:
+        return
+    typer.echo("\nShared base names (%d), one line each:" % len(families))
+    target = show(opts.scripts_dir / phase_label(opts.phase) / SLOTS)
+    for base, slots, source, verdict in families:
+        head = "  %-16s %2d slots" % (base, len(slots))
+        if verdict == "ok":
+            typer.echo("%s  -> %s   same script in each; inference is right"
+                       % (head, show(source)))
+        elif verdict == "differ":
+            warn("%s  -> %s   but they are NOT the same script: %s"
+                 % (head, show(source), ", ".join(slots)))
+            warn("  %-16s    filling them all from one file would overwrite one with "
+                 "another -- map them in %s" % ("", target))
+        else:
+            warn("%s  -> nothing in %s matches %r; map each slot in %s"
+                 % (head, show(opts.scripts_dir), base, target))
+
+
 # ---------------------------------------------------------------------- sync
 def stage_unmatched(path: Path, text: str, opts: Options) -> bool:
     """Copy an unmatched game file into `scripts/_unmatched/` to be written.
@@ -563,17 +936,27 @@ def pull_file(path: Path, text: str, want: Optional[int], index, opts: Options) 
         warn("  skip  %-28s marked %r but holds no code; nothing to pull" % (path.name, opts.pull))
         return False
 
-    group = index.get(base_name(path.stem))
-    if group is not None:
-        target, how = group.select(want, opts)
+    mapped = opts.slots.declared(path.stem)
+    if mapped:
+        # The map says where this slot's source lives, so that is where it goes
+        # back to. The file need not exist yet: mapping a card and then pulling it
+        # out of the game is a reasonable way to start one.
+        target, how = opts.slots.resolve(path.stem, want, opts, must_exist=False)
         if target is None:
             warn("  skip  %-28s %s" % (path.name, how))
             return False
     else:
-        target, how = opts.unmatched_dir / path.name, "new, staged"
+        group = index.get(base_name(path.stem))
+        if group is not None:
+            target, how = group.select(want, opts)
+            if target is None:
+                warn("  skip  %-28s %s" % (path.name, how))
+                return False
+        else:
+            target, how = opts.unmatched_dir / path.name, "new, staged"
 
     note = None
-    if opts.renumber:
+    if opts.renumber and not mapped:
         body, _, note = renumber(body, path.stem, target.stem)
     parts = [opts.pull] + ([how] if how else []) + ([note] if note else [])
     suffix = "  [%s]" % ", ".join(parts)
@@ -624,25 +1007,38 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
             typer.echo("  skip  %-28s already has code" % path.name)
         return False
 
-    group = index.get(base_name(path.stem))
-    if group is None:
-        # A marked file is an explicit request, so say so — but once, when it is
-        # first staged, not on every sweep for as long as it stays unmatched.
-        first_time = not (opts.unmatched_dir / path.name).exists()
-        if marked and (first_time or not quiet_skips):
-            warn("  skip  %-28s marked %r but no match in scripts/" % (path.name, opts.magic))
-        elif not marked and not quiet_skips:
-            typer.echo("  skip  %-28s no match in scripts/" % path.name)
-        stage_unmatched(path, text, opts)
-        return False
-
-    source, how = group.select(want, opts)
-    if source is None:
-        # No version of this script for the phase being played. A marked file asked
-        # explicitly, so always say why; otherwise only when verbose.
-        if marked or not quiet_skips:
+    # A mapped slot never goes near inference. The game named this file by its
+    # position in the Control Room, so its name says nothing about what belongs
+    # in it, and the map is the only thing that does.
+    mapped = opts.slots.declared(path.stem)
+    if mapped:
+        source, how = opts.slots.resolve(path.stem, want, opts)
+        if source is None:
+            # Always loud: a map entry is a statement, and a statement that did
+            # not resolve is worth hearing about every sweep. Never staged either
+            # — the map already says what this slot is; the fix is that file.
             warn("  skip  %-28s %s" % (path.name, how))
-        return False
+            return False
+    else:
+        group = index.get(base_name(path.stem))
+        if group is None:
+            # A marked file is an explicit request, so say so — but once, when it is
+            # first staged, not on every sweep for as long as it stays unmatched.
+            first_time = not (opts.unmatched_dir / path.name).exists()
+            if marked and (first_time or not quiet_skips):
+                warn("  skip  %-28s marked %r but no match in scripts/" % (path.name, opts.magic))
+            elif not marked and not quiet_skips:
+                typer.echo("  skip  %-28s no match in scripts/" % path.name)
+            stage_unmatched(path, text, opts)
+            return False
+
+        source, how = group.select(want, opts)
+        if source is None:
+            # No version of this script for the phase being played. A marked file asked
+            # explicitly, so always say why; otherwise only when verbose.
+            if marked or not quiet_skips:
+                warn("  skip  %-28s %s" % (path.name, how))
+            return False
 
     body = read(source)
     if body is None:
@@ -650,7 +1046,9 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
         return False
 
     note = None
-    if opts.renumber:
+    if opts.renumber and not mapped:
+        # Never for a mapped slot: `panel_2` is the second position in the Control
+        # Room, not instance 2 of a machine, so there is no id to point at it.
         body, _, note = renumber(body, source.stem, path.stem)
     parts = ([opts.magic] if marked else []) + ([how] if how else []) + ([note] if note else [])
     suffix = "  [%s]" % ", ".join(parts) if parts else ""
@@ -803,7 +1201,7 @@ def make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magi
         raise typer.Exit(2)
     n, how, phases = resolve_phase(scripts_dir, phase)
     return Options(save, scripts_dir, strict, dry_run, verbose, not no_renumber, magic, pull,
-                   n, how, phases, phase)
+                   n, how, phases, phase, load_slot_maps(scripts_dir))
 
 
 def phase_banner(opts: Options) -> str:
@@ -821,17 +1219,22 @@ def phases(scripts_dir: Path = ScriptsOpt, phase: str = PhaseOpt):
     n, how, found = resolve_phase(scripts_dir, phase)
     index, conflicts = build_index(scripts_dir)
     libs = lib_index(scripts_dir)
-    opts = Options(Path("."), scripts_dir, phase=n, phase_how=how, phases=found)
+    slot_map = load_slot_maps(scripts_dir)
+    opts = Options(Path("."), scripts_dir, phase=n, phase_how=how, phases=found,
+                   slot_map=slot_map)
 
     typer.echo("\n" + phase_banner(opts))
-    typer.echo("\n  %-10s %7s %5s   %s" % ("phase", "scripts", "libs", "directory"))
+    typer.echo("\n  %-10s %7s %5s %5s   %s"
+               % ("phase", "scripts", "libs", "slots", "directory"))
     for p in list(found) + [None]:
         own = sum(1 for g in index.values() if p in g.candidates)
         own_libs = sum(1 for v in libs.values() if p in v)
-        if p is None and not own and not own_libs:
+        own_slots = len(slot_map.by_phase.get(p, {}))
+        if p is None and not own and not own_libs and not own_slots:
             continue
-        typer.echo("  %-10s %7d %5d   %s%s"
-                   % (phase_label(p), own, own_libs, show(phase_dir(scripts_dir, p)),
+        typer.echo("  %-10s %7d %5d %5d   %s%s"
+                   % (phase_label(p), own, own_libs, own_slots,
+                      show(phase_dir(scripts_dir, p)),
                       "   <- playing" if p == n else ""))
 
     if n is None:
@@ -859,6 +1262,7 @@ def phases(scripts_dir: Path = ScriptsOpt, phase: str = PhaseOpt):
     for base in missing:
         warn("  missing  %-24s exists only in %s" % (base, ", ".join(index[base].tags)))
     report_conflicts(conflicts)
+    report_slot_problems(slot_map)
     typer.echo("")
 
 
@@ -900,6 +1304,22 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
         typer.echo("  %-24s %s" % (key, ", ".join(labels)))
         typer.echo("  %-24s   -> %s" % ("", "%s  (%s)" % (show(chosen), how) if chosen else how))
     report_conflicts(conflicts)
+    report_slot_problems(opts.slots)
+
+    named = opts.slots.entries(opts)
+    if named:
+        typer.echo("\nSlot map (%d), slots named rather than inferred:" % len(named))
+        for slot, entry in sorted(named.items()):
+            notes = []
+            if entry.phase != opts.phase:
+                notes.append("from %s" % phase_label(entry.phase))
+            if not entry.path.is_file():
+                notes.append("MISSING")
+            if not (opts.save_dir / (slot + ".py")).exists():
+                notes.append("not in the save yet")
+            typer.echo("  %-24s %s%s"
+                       % (slot, show(entry.path),
+                          "   (%s)" % ", ".join(notes) if notes else ""))
 
     staged = sorted(opts.unmatched_dir.glob("*.py")) if opts.unmatched_dir.is_dir() else []
     if staged:
@@ -913,16 +1333,22 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
     typer.echo("\nSave scripts (%d):" % len(files))
     for path in files:
         text = read(path) or ""
-        group = index.get(base_name(path.stem))
+        mapped = opts.slots.declared(path.stem)
+        group = None if mapped else index.get(base_name(path.stem))
         pulled, pull_want, pull_bad = parse_magic(text, opts.pull)
         marked, want, bad = parse_magic(text, opts.magic)
         fillable = marked or is_empty(text, opts.strict)
-        source, how = group.select(want, opts) if group else (None, None)
+        source, how = (opts.slots.resolve(path.stem, want, opts) if mapped
+                       else (group.select(want, opts) if group else (None, None)))
         if bad or pull_bad:
             state = "marker names %r, which is not a phase" % (bad or pull_bad)
         elif pulled:
             if is_empty(strip_magic(text, opts.pull), False):
                 state = "marked %r but holds no code; nothing to pull" % opts.pull
+            elif mapped:
+                target, phow = opts.slots.resolve(path.stem, pull_want, opts, must_exist=False)
+                state = ("marked %r -> would pull to %s%s" % (opts.pull, show(target), "  [%s]" % phow if phow else "")
+                         if target else "marked %r, unresolved: %s" % (opts.pull, phow))
             elif group is None:
                 state = "marked %r -> would pull to %s" % (opts.pull, show(opts.unmatched_dir / path.name))
             else:
@@ -931,7 +1357,9 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
                          if target else "marked %r, unresolved: %s" % (opts.pull, phow))
         elif not fillable:
             state = "has code, left alone"
-        elif group is None:
+        elif mapped and source is None:
+            state = "empty, unresolved: %s" % how
+        elif group is None and not mapped:
             state = ("marked %r, " % opts.magic if marked else "empty, ") + "no match -> would stage"
         elif source is None:
             state = "empty, unresolved: %s" % how
@@ -940,11 +1368,26 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
             state += "would fill from %s" % show(source)
             if how:
                 state += "  [%s]" % how
-            if opts.renumber:
+            if opts.renumber and not mapped:
                 _, _, note = renumber(read(source) or "", source.stem, path.stem)
                 if note:
                     state += "  [%s]" % note
         typer.echo("  %-28s %s" % (path.name, state))
+
+    report_slot_families(index, opts)
+
+    # The game's own register of what each slot is. Advisory in both directions:
+    # it can name a slot this repo cannot fill, and the map can name a slot it has
+    # never heard of. Neither is fatal, and neither file is written.
+    manifest = read_manifest(opts.save_dir)
+    if manifest is None:
+        typer.echo("\n%s absent or unreadable; the map was not cross-checked." % MANIFEST)
+    else:
+        typer.echo("\n%s: %d script slot(s), %d library/libraries, %d retired."
+                   % (MANIFEST, len(manifest.scripts), len(manifest.libraries),
+                      len(manifest.abandoned)))
+        check_map_against_manifest(manifest, opts)
+        check_manifest_coverage(manifest, index, opts)
     typer.echo("")
 
 
@@ -957,6 +1400,8 @@ def once(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
     opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, phase, pull)
     index, conflicts = build_index(opts.scripts_dir)
     report_conflicts(conflicts)
+    report_slot_problems(opts.slots)
+    check_map_against_manifest(read_manifest(opts.save_dir), opts)
     typer.echo("Syncing %s" % opts.save_dir)
     typer.echo(phase_banner(opts))
     n = sync_all(index, opts)
@@ -975,6 +1420,8 @@ class Watcher:
         self.opts, self.delay = opts, delay
         self.index, self.conflicts = build_index(opts.scripts_dir)
         report_conflicts(self.conflicts)
+        report_slot_problems(opts.slots)
+        check_map_against_manifest(read_manifest(opts.save_dir), opts)
         self.pending = {}
         self.repo_due = None
 
@@ -985,7 +1432,7 @@ class Watcher:
 
     def note_repo(self, raw_path):
         path = Path(str(raw_path))
-        if path.suffix != ".py" and path.name != CURRENT:
+        if path.suffix != ".py" and path.name not in (CURRENT, SLOTS):
             return
         try:
             if UNMATCHED in path.relative_to(self.opts.scripts_dir).parts:
@@ -997,8 +1444,10 @@ class Watcher:
     def rebuild(self):
         """Re-read the repo tree, report what moved, and re-sweep.
 
-        The phase is re-resolved too: editing `scripts/.current` is how you move the
-        whole playthrough forward, and it should take effect without a restart.
+        The phase is re-resolved too, and so is every `slots.toml`: editing
+        `scripts/.current` is how you move the whole playthrough forward, and
+        naming a slot is how a card gets a script. Both should take effect
+        without a restart.
         """
         before = self.index
         was = (self.opts.phase, self.opts.phases)
@@ -1007,6 +1456,22 @@ class Watcher:
         if (self.opts.phase, self.opts.phases) != was:
             ok("  " + phase_banner(self.opts))
         self.index, self.conflicts = build_index(self.opts.scripts_dir)
+
+        # `slots.toml` is watched too: naming a slot is how a card gets its script,
+        # and that should take effect the moment you save the file.
+        named_before = self.opts.slots.entries(self.opts)
+        self.opts.slot_map = load_slot_maps(self.opts.scripts_dir)
+        named = self.opts.slots.entries(self.opts)
+        for slot in sorted(set(named) | set(named_before)):
+            was_at = named_before.get(slot)
+            now_at = named.get(slot)
+            if was_at is None:
+                ok("  slot  + %-22s %s" % (slot, show(now_at.path)))
+            elif now_at is None:
+                warn("  slot  - %-22s (was %s)" % (slot, show(was_at.path)))
+            elif was_at.path != now_at.path:
+                typer.echo("  slot  ~ %-22s %s" % (slot, show(now_at.path)))
+        report_slot_problems(self.opts.slots)
 
         def paths(group):
             return ", ".join(show(p) for p in sorted(group.candidates.values()))
@@ -1079,6 +1544,9 @@ def watch(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
     typer.echo(phase_banner(opts))
     typer.echo("Scripts  %s (%d, watched for adds, edits and renames)"
                % (opts.scripts_dir, len(watcher.index)))
+    if len(opts.slots):
+        typer.echo("Slots    %d named in %s (inference skipped for those)"
+                   % (len(opts.slots.entries(opts)), SLOTS))
     typer.echo("Staging  %s for game files with no match" % show(opts.unmatched_dir))
     if magic:
         typer.echo("Marker   %r at the top of a game file fills it from the repo" % magic)
