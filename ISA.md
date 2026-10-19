@@ -233,6 +233,8 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: An allocation declares its own freshness horizon, as {ttl_s, machines}, computed by the planner from its cadence against the live clock. A constant in the reader was wrong by a factor of thirty-six and tracked no change in game speed.
+- 2026-10-19: ISC-12 cannot be verified on this base either. The tier guard makes a sub-Mk-III generator ignore its lease before the fail-safe branch is reached, so a tier-1 oxygen generator holding its setpoint proves nothing about the kernel being silent. Like ISC-11, it waits on a Mk III pack.
 - 2026-10-19: The six structural probes became one `tools/check-phase03.sh` with named subcommands rather than six near-identical scripts, and each was mutation-tested before being trusted: a violation injected, the check confirmed red, the tree restored. A probe that has never been red is not evidence, and all six were green on first run.
 - 2026-10-19: The lease path is proven end to end. With the kernel running, `o2gen_1` printed `fully supplied` and `smelter_1` printed `leased, running` — a machine's behaviour changed because of a broadcast allowance, which is the whole premise of the architecture. The autonomy fix also showed its work: 27.7 hours of storage against the deficit, so safety held where the previous build wanted to shed at 6.08 W.
 - 2026-10-19: An unmeasured fluid fails open. A fluid absent from the envelope means safety could not measure it, which the planner now distinguishes from a measured zero: it grants the full want and says so in the trace. Starving every machine that needs a fluid because the reading failed is the worse of the two mistakes, and a machine below the tier that consumes it ignores the grant anyway.
@@ -248,7 +250,10 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 
 ## Learning
 
-- conjectured: the power envelope is generation minus load, so spare capacity is what the generators are making right now.
+- conjectured: a 900-second staleness horizon on a lease was conservative, since the planner only runs every quarter of a world hour.
+  refuted by: the kernel-silent test. The automations were stopped and the machines ran on, and the lease was still only 253 seconds old after 41 planner cadences had passed. The fail-safe branch was never reached, so the test proved nothing.
+  learned: a world hour is about 25 simulation seconds, so a quarter-hour cadence comes round every six. 900 seconds is 145 missed passes, during which a dead planner holds the entire base on a ghost. Only the publisher knows its own cadence, and a reader converting world hours to simulation seconds is wrong by two orders of magnitude, so the horizon now travels inside the allocation.
+  criterion now: ISC-12, ISC-13 — both still open, because neither has yet been observed., so spare capacity is what the generators are making right now.
   refuted by: the first run. Published `watts_free: 0` and a rehearsed shed needing 6.08 W, on a base that was running perfectly well on batteries with solar at zero.
   learned: a brownout is generation PLUS storage failing to fund a tick, so the quantity that matters is how long storage covers the deficit, not whether generation covers the load. Measuring the wrong one declares every nightfall an emergency and sheds the base at dusk.
   criterion now: ISC-17, refined from a generation test to an autonomy floor.

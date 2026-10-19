@@ -28,13 +28,19 @@
 #  are the machine's own. It publishes an allowance and the machine applies it.
 # =============================================================================
 
-from capability import hours, missing, network, now_hour, report, terraforming
+from capability import clock, hours, missing, network, now_hour, report, terraforming
 from bus import envelope, publish_allocation, publish_shed
 from trace import note
 
 LOOP = "plan"
 PASS_H = 0.25                # world hours between allocations
 RATES_KEY = "plan.rates"
+# Passes this loop may miss before its allocation should be disbelieved. The
+# horizon is published with every allocation, computed from this and the live
+# clock, because a world hour is roughly 25 simulation seconds and a reader
+# that guesses the conversion is wrong by a factor of a hundred.
+MISSABLE_PASSES = 4
+MIN_TTL_S = 10.0
 
 # What each consumer type wants, how much of it satisfies the machine, and
 # which pillar the output serves. Figures are the documented Mk III intakes;
@@ -220,6 +226,21 @@ def allocate(rows, free, rates, gap, hour):
     return by_outpost, order
 
 
+def lease_ttl():
+    """How long an allocation should be believed, in simulation seconds.
+
+    Derived from this loop's own cadence against the live clock, so it tracks
+    whatever speed the game is running at rather than assuming one. Floored,
+    because a horizon shorter than a pass would expire every lease before the
+    next one arrived and leave every machine permanently on its fail-safe.
+    """
+    c = clock()
+    if c == None:
+        return 60.0
+    per_pass = PASS_H * c.real_seconds_per_hour()
+    return max(MIN_TTL_S, per_pass * MISSABLE_PASSES)
+
+
 def main():
     report(LOOP)
     book = get_component("notebook")
@@ -248,8 +269,9 @@ def main():
             free = env["tonnes"]
 
         by_outpost, order = allocate(rows, free, rates, gap, hour)
+        ttl = lease_ttl()
         for outpost_id in by_outpost:
-            publish_allocation(outpost_id, by_outpost[outpost_id])
+            publish_allocation(outpost_id, by_outpost[outpost_id], ttl)
         publish_shed(order)
 
         hours(PASS_H)

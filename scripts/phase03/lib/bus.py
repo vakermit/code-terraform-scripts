@@ -32,9 +32,19 @@ ENV = "env"
 SHED = "shed"
 ALLOC = "alloc."          # + outpost id
 
-# A lease older than this is no lease. Generous against the planner's slow
-# cadence, tight enough that a dead planner is noticed within a work cycle.
-LEASE_STALE_S = 900
+# Fallback only, for an allocation that declares no horizon of its own.
+#
+# A fixed number here was a bug. 900 seconds looked conservative and is in
+# fact 145 planner passes: a world hour is about 25 simulation seconds at
+# normal speed, so the planner's quarter-hour cadence comes round every six.
+# A dead planner would have held the whole base on a stale lease for 145
+# missed passes, and a kernel-silent test ran 41 passes without the lease
+# ever going stale — the fail-safe branch was simply unreachable.
+#
+# So the publisher declares its own horizon in the allocation and readers
+# honour it. This value applies only when one does not, and is deliberately
+# tight: better a machine on its fail-safe than a machine obeying a ghost.
+LEASE_STALE_S = 45
 
 # The safety loop republishes far more often than the planner, so its own
 # envelope is held to a much shorter life.
@@ -97,25 +107,47 @@ def envelope():
 
 
 # -------------------------------------------------------------------- leases
-def publish_allocation(outpost_id, machines):
-    """The planner's allocation for one outpost: {machine_id: {field: value}}."""
-    return publish(ALLOC + outpost_id, machines)
+def publish_allocation(outpost_id, machines, ttl_s):
+    """The planner's allocation for one outpost.
+
+    Shape: {"ttl_s": seconds, "machines": {machine_id: {field: value}}}.
+
+    The horizon travels with the payload because only the publisher knows its
+    own cadence, and that cadence is measured in world hours while an age is
+    measured in simulation seconds. A reader guessing the conversion gets it
+    wrong by two orders of magnitude, which is how a dead planner came to
+    hold a stale lease for 145 passes.
+    """
+    return publish(ALLOC + outpost_id, {"ttl_s": ttl_s, "machines": machines})
 
 
 def lease(machine_id, outpost_id):
-    """This machine's lease, or None when there is no fresh allocation for it.
+    """This machine's lease, or None when there is no fresh allowance for it.
 
-    An allocation that is fresh but does not name this machine is still None:
-    a machine the planner did not mention has no allowance, which is a
-    different thing from the planner being silent only in its consequences —
-    both land the machine on its own fail-safe.
+    Four outcomes collapse to None, and callers must not tell them apart: no
+    bus, nothing broadcast, an age past the payload's own horizon, and an
+    allocation that simply does not name this machine. Every one of them
+    means nobody is accounting for this machine right now, which is exactly
+    what a fail-safe is for.
     """
-    allocation = fresh(ALLOC + outpost_id, LEASE_STALE_S)
-    if allocation == None:
+    bus = _bus()
+    if bus == None:
         return None
-    if not allocation.has(machine_id):
+    info = bus.latest_info(ALLOC + outpost_id)
+    if info == None or info.age_seconds == None:
+        return None                        # see the None-age trap above
+    payload = info.value
+    if payload == None or not payload.has("machines"):
         return None
-    return allocation[machine_id]
+    limit = LEASE_STALE_S
+    if payload.has("ttl_s") and payload["ttl_s"] > 0:
+        limit = payload["ttl_s"]
+    if info.age_seconds > limit:
+        return None
+    machines = payload["machines"]
+    if not machines.has(machine_id):
+        return None
+    return machines[machine_id]
 
 
 def allowance(machine_id, outpost_id, field, default=0):
