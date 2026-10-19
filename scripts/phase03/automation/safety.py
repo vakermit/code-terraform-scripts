@@ -39,6 +39,7 @@ from capability import clock, missing, now_hour, power, report
 # stale copy with an older signature would raise on every pass. Two
 # positional arguments have been `publish`'s contract from the start.
 from bus import ENV, publish, shed_order
+from store import stock_of          # inherited from phase02/lib
 from trace import note
 
 LOOP = "safety"
@@ -55,6 +56,10 @@ SETTLE_PASSES = 3            # passes to wait after a shed before shedding again
 # a browned-out subnet once storage covers one hour of the remaining deficit,
 # so two hours is one hour of margin over the floor the game itself uses.
 MIN_AUTONOMY_H = 2.0
+# Counted goods more than one machine wants. Named here and in the planner's
+# wants, which is the price of the pipeline only flowing one way: a loop that
+# measures must not have to ask the loop that decides what to measure.
+CONTENDED = ["iron_ingot"]
 
 # Type ids that are life support or rescue. Shed last, whatever the ranking
 # says, and never shed on the conservative fallback at all.
@@ -279,6 +284,24 @@ def water_supply():
     return found
 
 
+def contended_stock():
+    """How much of each contended good is on hand, as {item_id: units}.
+
+    Counted goods, not rates, so they travel in their own envelope field: a
+    tonne per hour and a count of ingots are different kinds of number and
+    sharing a field would invite exactly one bug.
+
+    The list is here rather than read from the planner's wants because the
+    pipeline only flows one way — safety measures, the planner decides — and
+    a measuring loop that had to ask the deciding loop what to measure would
+    be a cycle. The cost is that a new contended good is named twice.
+    """
+    found = {}
+    for item in CONTENDED:
+        found[item] = stock_of(item)
+    return found
+
+
 def main():
     report(LOOP)
     if not ENFORCE:
@@ -325,12 +348,13 @@ def main():
             spare = 0.0
             autonomy = summary.stored / deficit    # Wh over W gives hours
 
-        # A fluid absent from `tonnes` means unmeasured, not zero. The
-        # planner relies on that distinction, so never fill in a 0 here.
+        # A resource absent from `tonnes` or `stock` means unmeasured, not
+        # zero. The planner relies on that distinction, so never fill in a 0.
         publish(ENV, {
             "watts_free": max(0, spare),
             "reserve_w": RESERVE_W,
             "tonnes": water_supply(),
+            "stock": contended_stock(),
             "autonomy_h": autonomy,
             "stored_wh": summary.stored,
             "hour": hour,
