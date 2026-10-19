@@ -3,7 +3,7 @@ task: "Phase 3 — full base automation platform for Code: Terraform"
 slug: 20261019-150000_phase03-automation-platform
 project: code-terraform-game
 phase: climbing
-progress: 14/48
+progress: 15/48
 started: 2026-10-19T15:00:00Z
 updated: 2026-10-19T17:05:00Z
 principal_stated_goal: "then we will do a full rewrite for the next phase (3?)"
@@ -203,7 +203,7 @@ Why: four loops allocating from a learned model is opaque in a way phase 2 never
 - [x] ISC-49: A discretionary machine is named in every allocation, so permission is granted rather than merely not withheld.
 - [ ] ISC-35: Any machine being off is explained by one row of the decision trace.
 - [x] ISC-36: The trace is bounded to forty rows per loop, each loop owning its own key.
-- [ ] ISC-37: A card renders the envelope, the current allocation and the trace without issuing commands.
+- [x] ISC-37: A card renders the envelope, the current allocation and the trace without issuing commands.
 - [ ] ISC-44: Antecedent: the trace rows read as reasons a day later, with the machine, the rank, the figure and the cause on one line.
 
 ### F7 · The biosphere runs itself
@@ -234,6 +234,10 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: A pressure generator takes no quantitative lease at all, and that is a property of the machine rather than a simplification. Each sweep is a forced bet: sync() inside a roughly 4-unit window is +25%, outside is -10%, and not firing is also -10%. Throttling it does not mean producing less, it means losing 10% a sweep, which is worse than switching it off. So the only honest lever is the breaker, and the script reads its lease solely to report whether the kernel is accounting for it.
+- 2026-10-19: The charging station keeps rescue above the lease entirely. A kernel ranking by marginal terraforming value would rank a station low, because it produces nothing, and would be right about the production and catastrophically wrong about the consequence — a stranded rover is not a throttleable load. Top-ups are discretionary and do obey the lease.
+- 2026-10-19: control_room is excluded from the FAIL_SAFE probe. A card is a view with no setpoint to hold or release, so demanding one would ask it to declare something it cannot have. The probe flagged the first card written, which is it earning its keep rather than a false positive.
+- 2026-10-19: Built but deliberately NOT deployed while the principal sleeps: heater, pressure and charging station. Filling a marked slot restarts the machine on new code, and these are live life support on a long playthrough. A pressure generator in particular loses 10% per missed sweep, so an untested timing loop running unattended risks terraforming progress rather than merely behaving oddly. They sync when someone is watching.
 - 2026-10-19: The trace deduplicates an unchanged decision. The planner runs every few seconds, so one fabricator starved by a persistent shortage wrote the same row forever and pushed everything else out of a forty-row window. A row matching the last one for that subject now updates its hour instead, keeping both when the condition started and that it still holds, for one slot rather than forty.
 - 2026-10-19: ISC-13 is verified by an accident rather than a test. The planner died on the library signature bug, which left the machines genuinely unled, and both printed their fail-safe lines. A real failure is better evidence than a contrived one, and it only became readable because solar had stopped flooding the console.
 - 2026-10-19: ISC-12 remains open even though a line saying `oxygen: no fresh lease, holding` appeared, because the o2gen running in the save predates the tier guard: it was never re-marked for refill after that commit. The code that produced the evidence is not the code in the repo, and counting it would be the ring-buffer mistake in a new costume.
@@ -319,6 +323,7 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - ISC-18: `safety.watts` learned temp_heater 2 then 6, oxygen_generator 8, pressure_generator 35 across two runs.
 - ISC-36: `safety.trace` and `plan.trace` are separate Archive keys, each bounded, wseq 2093.
 - ISC-49: `smelter_1` and `fabricator_2` appear in the allocation with a bare `run` grant, wseq 2093.
+- ISC-37: `scripts/phase03/control_room/kernel_card.py` draws envelope, allocation and merged trace; grep confirms no set_powered, set_enabled, run_control, buy or sell. Not yet deployed — it needs a panel slot.
 - ISC-13: console at save wseq 2166 — `smelter: no fresh lease, idle` during the window the planner was dead, then `leased, running` once it published again.
 - ISC-3, ISC-4, ISC-9, ISC-10, ISC-14, ISC-40: `tools/check-phase03.sh` all green, and each check verified red against an injected violation (6 of 6 caught) before being trusted. ISC-40's probe exempts `trace.py`, which writes a parameterised key its caller supplies.
 
@@ -326,5 +331,6 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 
 - [ ] Create one Automation in game and record how it appears on disk — blocks the kernel's deployment path and is currently fog.
 - [ ] Explicit slot mapping in `ct_sync` for cards and automations — delegated to its own session, since several `panel_N` slots currently collapse to one base name.
+- [ ] Deploy heater, pressure, charging station and the kernel card, with someone watching. The card also needs a panel slot created in game, and `kernel_card` will not name-match `panel_N` until the slot map from PR #1 lands.
 - [ ] ISC-11 cannot be verified on this base: every generator is tier 1, so no machine consumes water and the lease has nothing to throttle. It needs a Mk III pack installed before the claim means anything. Left as an open claim rather than a fog entry, because the question is precisely stated and the falsifier is nameable; only the hardware is missing.
 - [ ] Decide whether the Steam Condenser changes the water allocation problem enough to re-rank — gated behind 1,000,000 Plants, far outside this run.

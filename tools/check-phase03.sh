@@ -11,7 +11,13 @@ set -u
 cd "$(dirname "$0")/.." || exit 2
 
 TREE=scripts/phase03
-MACHINE_DIRS="atmos factory harvesting power rover sensor bio control_room"
+# Directories holding MACHINE scripts: ones with a `self` that owns hardware
+# and therefore a fail-safe direction. control_room is deliberately absent —
+# a card is a view with no setpoint to hold or release, so demanding a
+# FAIL_SAFE of one would be asking it to declare something it cannot have.
+# The check flagged the first card written, which is the probe earning its
+# keep rather than a false positive.
+MACHINE_DIRS="atmos factory harvesting power rover sensor bio"
 fail=0
 
 say()  { printf '%s\n' "$*"; }
