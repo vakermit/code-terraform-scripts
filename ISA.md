@@ -99,7 +99,7 @@ I leave the base for an hour of real time and come back to find it further along
 | ISC-14 | bash | FAIL_SAFE is declared in every machine script | 1 per script | `bash tools/check-fail-safe-declared.sh` | derived: fail-safe-direction |
 | ISC-15 | manual | the envelope names watts, tonnes and reserve | 3 fields present | `read the envelope broadcast` | literal |
 | ISC-16 | manual | one allocation dict is published per outpost | 1 per outpost | `list channels and count` | literal |
-| ISC-17 | manual | projected load stays under generation minus reserve | 0 brownouts in 24h | `run 24 world hours, read the trace` | literal |
+| ISC-17 | manual | autonomy holds above the floor overnight | 0 brownouts, 0 dusk sheds | `run 24 world hours through a night, read the trace` | literal |
 | ISC-18 | manual | the wattage table converges on measurement | within 10% observed | `compare the archive table to power total()` | derived: measure-not-assume |
 | ISC-19 | manual | only machines safety shed are restored | operator-off untouched | `force a deficit, then relieve it` | derived: no-stranded-machines |
 | ISC-20 | manual | life support is never shed first | ranks last | `force a deficit, read the shed sequence` | derived: fail-safe-direction |
@@ -164,7 +164,7 @@ Why: it proves the whole stack on a single path before any of it is widened, so 
 ### F2 · The base never browns out
 Why: brownout is all-or-nothing with no consumer priority, so the only winning move is to never reach the cliff. (after: ISC-15)
 
-- [ ] ISC-17: Projected load stays under generation minus reserve across 24 world hours of normal play.
+- [ ] ISC-17: Battery autonomy at the projected deficit never falls below the floor across 24 world hours of normal play, and no brownout occurs.
 - [ ] ISC-18: The per-machine wattage table is measured rather than assumed.
 - [ ] ISC-19: A machine the safety loop switched off is switched back on when headroom returns, and a machine the operator switched off is left alone.
 - [ ] ISC-20: Anti: life support is never the first thing shed.
@@ -233,6 +233,8 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: An unmeasured fluid fails open. A fluid absent from the envelope means safety could not measure it, which the planner now distinguishes from a measured zero: it grants the full want and says so in the trace. Starving every machine that needs a fluid because the reading failed is the worse of the two mistakes, and a machine below the tier that consumes it ignores the grant anyway.
+- 2026-10-19: Safety never sheds a machine whose rated draw is zero. The first run rehearsed shedding two machines at `w: 0`, which frees nothing and buys only a dark machine; an idle machine reports no draw and a type never seen busy is absent from the wattage table, so this is the common case early rather than an edge.
 - 2026-10-19: Automation deployment is solved, and the fog entry asking about it is killed. An Automation created in game appears as `automation_N.py` in the same external-editor directory as every other script, so `ct_sync` reaches it exactly as it reaches a Control Room card — by slot id, through the slot map, with no new mechanism. ISC-48 already carries the claim.
 - 2026-10-19: Registered `capability`, `bus` and `trace` by writing `state.libraryScripts` in the save directly, with the game stopped and a backup taken, because the in-game Import as Game Library step is not something a script can reach. The schema was copied from an existing entry rather than invented: source three times over, a fresh `libraryIncarnationId` from the high-water counter, everything else at its idle default.
 - 2026-10-19: Safety ships with its breaker disarmed (`ENFORCE = False`), printing what it would shed rather than shedding. The first pass runs on an empty wattage table and reads the base from live draw alone, so on a base near capacity it could shed within seconds of starting, against the crude fallback order because no planner is ranking yet. A loop that can switch a base off earns a rehearsal.
@@ -243,6 +245,16 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Opportunity may preempt freight on an expiring deadline, against a standing drone reserve the planner holds back. Aftermath expires in 48 to 96 hours behind a 4-hour decode window, so a fully committed fleet would simply lose it.
 
 ## Learning
+
+- conjectured: the power envelope is generation minus load, so spare capacity is what the generators are making right now.
+  refuted by: the first run. Published `watts_free: 0` and a rehearsed shed needing 6.08 W, on a base that was running perfectly well on batteries with solar at zero.
+  learned: a brownout is generation PLUS storage failing to fund a tick, so the quantity that matters is how long storage covers the deficit, not whether generation covers the load. Measuring the wrong one declares every nightfall an emergency and sheds the base at dusk.
+  criterion now: ISC-17, refined from a generation test to an autonomy floor.
+
+- conjectured: a pump's output port reports the water it is supplying.
+  refuted by: `tonnes: {}` on every pass, and then the reference, which says a pass-through output such as a pump's reads 0 because nothing buffers there.
+  learned: supply cannot be measured at the pump. The well behind it carries a rated `flow_rate` by yield tier, which is a ceiling rather than a live reading — the right kind of error, since machines degrade gracefully when actual flow falls short.
+  criterion now: ISC-21.
 
 - conjectured: an unregistered file under `lib/` is importable anyway, since both machine scripts reported `running` with no error after the swap.
   refuted by: the console history. `automation_1` died on `ModuleNotFoundError: No module named 'capability'` at its import line. The machine scripts' own failures had simply rotated out of a 500-entry console window before I looked.

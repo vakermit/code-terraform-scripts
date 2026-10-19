@@ -184,16 +184,24 @@ def allocate(rows, free, rates, gap, hour):
         if row["fluid"]:
             want = WANTS[row["type"]]
             fluid = want["fluid"]
-            have = 0.0
-            if remaining.has(fluid):
-                have = remaining[fluid]
-            give = min(want["full"], have)
-            if give > 0:
-                remaining[fluid] = have - give
-            grant[fluid] = give
-            if give < want["full"]:
-                note(LOOP, hour, row["id"], "starved by envelope",
-                     {"got": give, "want": want["full"], "rank": rank})
+            if not remaining.has(fluid):
+                # Safety could not measure this supply at all, which is a
+                # different thing from there being none of it. Granting the
+                # full want is the safer error: an unmeasured fluid that is
+                # actually plentiful would otherwise starve every machine
+                # that needs it, and a machine below the tier that consumes
+                # it ignores the grant anyway.
+                grant[fluid] = want["full"]
+                grant["unmeasured"] = True
+                note(LOOP, hour, row["id"], "supply unmeasured, granted in full",
+                     {"fluid": fluid, "want": want["full"], "rank": rank})
+            else:
+                give = min(want["full"], remaining[fluid])
+                remaining[fluid] = remaining[fluid] - give
+                grant[fluid] = give
+                if give < want["full"]:
+                    note(LOOP, hour, row["id"], "starved by envelope",
+                         {"got": round(give, 2), "want": want["full"], "rank": rank})
         else:
             # A discretionary machine needs only permission, not a quantity:
             # it has no fluid to meter and its draw is already inside the

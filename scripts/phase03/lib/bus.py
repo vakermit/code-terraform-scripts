@@ -78,12 +78,23 @@ def publish(channel, value):
 
 
 # ------------------------------------------------------------------ envelope
-def publish_envelope(watts_free, reserve_w, tonnes, hour):
-    """Safety's view of what is spendable. `tonnes` is {fluid_id: t/h free}."""
+def publish_envelope(watts_free, reserve_w, tonnes, hour,
+                     autonomy_h=-1.0, stored_wh=0.0):
+    """Safety's view of what is spendable.
+
+    `tonnes` is {fluid_id: t/h}, and a fluid ABSENT from it means safety could
+    not measure that supply — not that there is none. Readers must tell those
+    apart or they will starve a machine over a failed reading.
+
+    `autonomy_h` is how long storage covers the current deficit, or -1 when
+    generation already covers the load and there is no horizon to report.
+    """
     return publish(ENV, {
         "watts_free": watts_free,
         "reserve_w": reserve_w,
         "tonnes": tonnes,
+        "autonomy_h": autonomy_h,
+        "stored_wh": stored_wh,
         "hour": hour,
     })
 

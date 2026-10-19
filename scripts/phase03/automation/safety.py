@@ -46,6 +46,10 @@ ENFORCE = False
 PASS_S = 5.0                 # real seconds between passes
 RESERVE_W = 150              # watts never offered to the planner
 SETTLE_PASSES = 3            # passes to wait after a shed before shedding again
+# Hours of battery autonomy to hold at the current deficit. The game restores
+# a browned-out subnet once storage covers one hour of the remaining deficit,
+# so two hours is one hour of margin over the floor the game itself uses.
+MIN_AUTONOMY_H = 2.0
 
 # Type ids that are life support or rescue. Shed last, whatever the ranking
 # says, and never shed on the conservative fallback at all.
@@ -164,6 +168,7 @@ def shed_to_fit(deficit_w, table, seen, ours, hour):
     ranked, how = shed_candidates(seen)
     freed = 0
     cut = 0
+    skipped = 0
     for machine_id in ranked:
         if freed >= deficit_w:
             break
@@ -171,6 +176,13 @@ def shed_to_fit(deficit_w, table, seen, ours, hour):
         for m in seen:
             if m.id == machine_id:
                 rated = max(m.consumed, table.get(m.type_id, 0))
+        if rated <= 0:
+            # Draws nothing measurable, so switching it off frees nothing and
+            # buys only a dark machine the operator has to notice. An idle
+            # machine reports 0 W and a type we have never seen busy is absent
+            # from the table, so this is the common case early on, not an edge.
+            skipped = skipped + 1
+            continue
         if not ENFORCE:
             note(LOOP, hour, machine_id, "would shed, rehearsing",
                  {"w": rated, "need": deficit_w, "by": how})
@@ -187,7 +199,11 @@ def shed_to_fit(deficit_w, table, seen, ours, hour):
         note(LOOP, hour, machine_id, "shed for power",
              {"w": rated, "need": deficit_w, "by": how})
     if cut == 0 and deficit_w > 0:
-        note(LOOP, hour, "grid", "deficit with nothing sheddable", {"w": deficit_w})
+        note(LOOP, hour, "grid", "deficit with nothing sheddable",
+             {"w": round(deficit_w, 1), "zero_draw": skipped, "by": how})
+    elif freed < deficit_w:
+        note(LOOP, hour, "grid", "shed all it could, still short",
+             {"freed": round(freed, 1), "need": round(deficit_w, 1)})
     return freed
 
 
@@ -224,28 +240,35 @@ def restore(seen, headroom_w, table, ours, hour):
 
 
 def water_supply():
-    """Tonnes per hour of water the base can currently draw.
+    """Tonnes per hour of water the base can draw, or {} when unmeasurable.
 
-    Measured from the pumps that report a live flow. A pump whose output is a
-    pass-through reads zero, so this is a floor rather than a true total — the
-    planner treats it as such, and the real figure is one of the ISA's open
-    questions rather than something guessed at here.
+    The first version read each pump's `water_out.flow_rate()` and always got
+    zero. That was not a bug in the base, it is the documented behaviour: a
+    pass-through output such as a pump's reads 0, because nothing buffers
+    there. Measuring supply at that port can never work.
+
+    So ask the well instead. A pump sited on a well exposes it through
+    `well()`, and the site carries its own rated `flow_rate` — 10, 20 or 30
+    t/h by yield tier for water. That is a ceiling rather than a live reading,
+    which is the right kind of error here: the planner allocates against it
+    and the machines degrade gracefully if the real flow falls short.
+
+    An empty result means "could not measure", NOT "there is none". The
+    planner distinguishes the two, because starving every fluid machine on a
+    failed measurement is the worse mistake.
     """
     found = {}
-    grid = power()
-    if grid == None:
-        return found
-    total = 0
+    total = 0.0
     for m in members():
         if m.type_id != "water_pump":
             continue
         pump = get_component(m.id)
         if pump == None:
             continue
-        port = pump.water_out
-        if port == None:
-            continue
-        total = total + port.flow_rate()
+        well = pump.well()
+        if well == None:
+            continue                      # pump built but not sited on a well
+        total = total + well.flow_rate
     if total > 0:
         found["water"] = total
     return found
@@ -283,15 +306,31 @@ def main():
 
         summary = grid.total()
         load = projected_load(table, seen)
-        spare = summary.generated - load - RESERVE_W
 
-        publish_envelope(max(0, spare), RESERVE_W, water_supply(), hour)
+        # Generation alone is the wrong measure. A brownout happens when
+        # generation PLUS storage cannot fund the load for a tick, so a base
+        # running on batteries overnight with solar at zero is not in trouble
+        # — it has hours of autonomy. Measuring spare as generated minus load
+        # declares every night an emergency and sheds the base at dusk.
+        deficit = load - summary.generated
+        if deficit <= 0:
+            spare = 0 - deficit - RESERVE_W
+            autonomy = -1.0                   # not drawing down; no horizon
+        else:
+            spare = 0.0
+            autonomy = summary.stored / deficit    # Wh over W gives hours
+
+        publish_envelope(max(0, spare), RESERVE_W, water_supply(), hour,
+                         autonomy, summary.stored)
 
         before = ours.length
         if cooldown > 0:
             cooldown = cooldown - 1
-        elif spare < 0:
-            shed_to_fit(0 - spare, table, seen, ours, hour)
+        elif deficit > 0 and autonomy < MIN_AUTONOMY_H:
+            # Shed only enough to put the horizon back above the floor, not
+            # enough to erase the deficit: running on batteries is normal.
+            keep = summary.stored / MIN_AUTONOMY_H
+            shed_to_fit(deficit - keep, table, seen, ours, hour)
             cooldown = SETTLE_PASSES
         elif spare > RESERVE_W:
             restore(seen, spare - RESERVE_W, table, ours, hour)
