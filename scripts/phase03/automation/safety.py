@@ -33,7 +33,12 @@
 # =============================================================================
 
 from capability import clock, missing, now_hour, power, report
-from bus import publish_envelope, shed_order
+# `publish` and `ENV` rather than `publish_envelope`: the envelope's shape is
+# this loop's own output, so it is built here. That also removes a real
+# hazard — the save keeps its own copy of each registered library, and a
+# stale copy with an older signature would raise on every pass. Two
+# positional arguments have been `publish`'s contract from the start.
+from bus import ENV, publish, shed_order
 from trace import note
 
 LOOP = "safety"
@@ -320,8 +325,16 @@ def main():
             spare = 0.0
             autonomy = summary.stored / deficit    # Wh over W gives hours
 
-        publish_envelope(max(0, spare), RESERVE_W, water_supply(), hour,
-                         autonomy, summary.stored)
+        # A fluid absent from `tonnes` means unmeasured, not zero. The
+        # planner relies on that distinction, so never fill in a 0 here.
+        publish(ENV, {
+            "watts_free": max(0, spare),
+            "reserve_w": RESERVE_W,
+            "tonnes": water_supply(),
+            "autonomy_h": autonomy,
+            "stored_wh": summary.stored,
+            "hour": hour,
+        })
 
         before = ours.length
         if cooldown > 0:

@@ -78,27 +78,19 @@ def publish(channel, value):
 
 
 # ------------------------------------------------------------------ envelope
-def publish_envelope(watts_free, reserve_w, tonnes, hour,
-                     autonomy_h=-1.0, stored_wh=0.0):
-    """Safety's view of what is spendable.
-
-    `tonnes` is {fluid_id: t/h}, and a fluid ABSENT from it means safety could
-    not measure that supply — not that there is none. Readers must tell those
-    apart or they will starve a machine over a failed reading.
-
-    `autonomy_h` is how long storage covers the current deficit, or -1 when
-    generation already covers the load and there is no horizon to report.
-    """
-    return publish(ENV, {
-        "watts_free": watts_free,
-        "reserve_w": reserve_w,
-        "tonnes": tonnes,
-        "autonomy_h": autonomy_h,
-        "stored_wh": stored_wh,
-        "hour": hour,
-    })
-
-
+# The envelope is written by the safety loop, which builds the dict itself and
+# publishes it through `publish`. There is deliberately no writer helper here:
+# a library's registered copy inside the save can lag the file on disk, and a
+# helper whose signature grows would then raise on every pass. Only the reader
+# lives in the library, because every machine needs it and none of them write.
+#
+# ENVELOPE SHAPE
+#   watts_free   W the planner may commit beyond the reserve
+#   reserve_w    W held back and never offered
+#   tonnes       {fluid_id: t/h}; a fluid ABSENT means unmeasured, not zero
+#   autonomy_h   hours storage covers the deficit, or -1 when not drawing down
+#   stored_wh    conventional battery energy, Lightning reserve excluded
+#   hour         world-clock hour it was written
 def envelope():
     """The current envelope, or None when safety is silent or stale."""
     return fresh(ENV, ENV_STALE_S)
