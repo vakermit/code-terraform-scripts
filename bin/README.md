@@ -6,6 +6,8 @@ and fills each such file with the matching script from [`scripts/`](../scripts/)
 repo stays the source of truth and the game just receives copies.
 
 ```bash
+python bin/ct_sync.py phases     # the phases in the tree, and what each one covers
+python bin/ct_sync.py use p3     # play phase 3 from now on
 python bin/ct_sync.py status     # what maps to what, and what each save file would do
 python bin/ct_sync.py once       # fill everything fillable right now, then exit
 python bin/ct_sync.py watch      # keep running; fill files as the game creates them
@@ -17,6 +19,7 @@ python bin/ct_sync.py watch      # keep running; fill files as the game creates 
 | --- | --- | --- |
 | Save directory | newest `%APPDATA%\io.codeterraform.game\save_*_scripts` | `--save-dir` / `CT_SAVE_DIR` |
 | Script tree | `scripts/` in this repo | `--scripts-dir` / `CT_SCRIPTS_DIR` |
+| Phase being played | `scripts/.current`, else the highest phase present | `--phase` / `CT_PHASE` |
 
 The active save changes with each playthrough, so auto-detection picks the most recently
 modified one and prints which it chose. `watch` resolves this once at startup — if you
@@ -25,47 +28,68 @@ switch saves mid-session, restart it.
 ## Matching
 
 A save file matches a repo script when their names agree **after dropping a trailing
-`_<number>`**. So `scripts/power/solar_1.py` fills `solar_1.py`, `solar_2.py` … `solar_6.py`,
-and `scripts/bio/bio_lab_1.py` fills `bio_lab_3.py`. Subdirectories under `scripts/` are
-purely for organisation; only the file name matters.
+`_<number>`**. So `phase02/power/solar_1.py` fills `solar_1.py`, `solar_2.py` … `solar_6.py`,
+and `phase02/bio/bio_lab_1.py` fills `bio_lab_3.py`. Below the phase directory, the
+grouping (`power/`, `bio/`, `atmos/`) is purely for organisation; only the file name matters.
 
-If two repo files reduce to the same base name, neither is used and `status` flags the
-ambiguity rather than guessing.
+If two repo files in the *same phase* reduce to the same base name, neither is used and
+`status` flags the ambiguity rather than guessing. One file per base per phase.
 
-## Variants: early / mid / late, v1 / v2
+## Phases
 
-Put alternative versions of a script in **subdirectories** of its group:
+The game is played in stages, and each stage wants different scripts — the solar script
+that was right with three panels and no battery bank is not the one you want later. The
+top level of `scripts/` is therefore the **phase**:
 
 ```
-scripts/bio/
-├── .current              ← "mid"   (git-ignored; per-playthrough state)
-├── early/
-│   ├── bio_collector_1.py
-│   ├── bio_exchange_1.py
-│   └── bio_lab_1.py
-└── mid/
-    └── bio_lab_1.py      ← only the lab has a mid version so far
+scripts/
+├── .current              ← "phase02"  (git-ignored; per-playthrough state)
+├── common/               ← phase-independent: contract solutions, one-offs
+│   └── contract/
+├── phase01/
+│   └── bio/              ← the first biology loop, superseded
+└── phase02/
+    ├── lib/              ← libraries are phase-scoped too
+    ├── atmos/  bio/  control_room/  factory/
+    └── harvesting/  power/  rover/  sensor/
 ```
 
-The directory name is the variant tag. Which one fills a slot is decided by, most
+A phase directory is anything matching `phaseNN` (`phase2`, `p2` and `phase02-orbital`
+also parse; the number is what orders them). Which phase is in force is decided by, most
 specific first:
 
-1. **The marker in the game file** — `xyz mid` (also `xyz-mid`, `xyz:mid`) pulls that
-   variant into that one slot. Useful for trying the new version on a single machine.
-2. **`.current` in the group directory** — a one-line text file naming the default for
-   everything under it. `echo mid > scripts/bio/.current`. Changing it while `watch`
-   runs re-sweeps immediately. It is git-ignored because it is where *you* are in *this*
-   playthrough, not part of the scripts.
-3. **`--variant NAME`** / `CT_VARIANT` — a global default for groups with no `.current`.
-4. **A plain file beside the variant dirs** (`bio/bio_lab_1.py` next to `bio/mid/`) is
-   the implicit default when nothing else chooses.
+1. **The marker in the game file** — `xyz p1` (also `xyz-p1`, `xyz:phase01`) fills that
+   one slot from that one phase. It is exact: if the phase has no version of the script
+   it says so rather than quietly serving another, because you asked for a specific one.
+2. **`scripts/.current`** — one line naming the phase, written by `ct_sync.py use p3`.
+   Editing it while `watch` runs re-resolves and re-sweeps immediately. Git-ignored:
+   it is where *you* are in *this* playthrough, not part of the scripts.
+3. **`--phase p3`** / `CT_PHASE`.
+4. **The highest phase present**, so a fresh clone with no `.current` works. Every
+   command prints the phase it chose and the chain behind it.
 
-If none of those resolve it, the slot is skipped and `status` says which variants exist.
+### Falling back
 
-**A variant directory can be partial.** Above, `bio_collector` has only one version, so
-it resolves to `early/` no matter what `.current` says — you can start `mid/` with a
-single file and grow it. `status` shows every group's variants with the chosen one in
-brackets and the reason.
+A script the active phase does not have comes from the newest earlier phase that does,
+and then from `common/`:
+
+```
+Phase    phase03 (scripts\.current)  falling back to phase02 -> phase01 -> common
+```
+
+That is what makes a rewrite incremental. Create `scripts/phase03/`, put the one script
+you have rewritten in it, and the other eighteen keep coming from `phase02` until you
+get to them. `phases` is the checklist:
+
+```
+phase03 resolves 39 of 39 script(s): 1 its own, 23 inherited, 15 shared from common/.
+  inherit  bio_collector            from phase02  (not rewritten for phase03 yet)
+  ...
+```
+
+`common/` is not a fallback so much as a decision: a contract puzzle has one right
+answer and no phase owns it. `phases` counts those separately from inherited scripts for
+that reason.
 
 Why a text file rather than a symlink: symlinks need Developer Mode or admin on
 Windows and git's symlink support there is opt-in; a one-line file does the same job
@@ -90,11 +114,11 @@ Tuned a script in the game's editor and want to keep it? Put **`zyx`** on its fi
 The next sweep copies it into the matching repo script and removes the marker:
 
 ```
-  pull  solar_3.py   -> scripts\power\solar_1.py  [zyx, solar_3 -> solar_1]
+  pull  solar_3.py   -> scripts\phase02\power\solar_1.py  [zyx, phase02, solar_3 -> solar_1]
 ```
 
 It is the mirror of a fill: the slot id is rewritten the other way (`solar_3` → `solar_1`),
-`zyx mid` targets a variant and `.current` / `--variant` decide otherwise, and an
+`zyx p1` targets one phase and `.current` / `--phase` decide otherwise, and an
 ambiguous target is refused rather than guessed. The repo file's previous contents go
 to `.ct-sync-backups/` first, though the repo is git — `git diff` is the real safety net.
 
@@ -134,12 +158,21 @@ mid-edit), and only a *truly blank* staged file is removed once a real match app
 
 ## Libraries (`lib/`)
 
-Shared code lives in `scripts/lib/*.py` and is **mirrored** into the save's `lib/`,
-not slot-matched: the game never creates an empty library for us and there is no
+Shared code lives in `scripts/<phase>/lib/*.py` and is **mirrored** into the save's
+`lib/`, not slot-matched: the game never creates an empty library for us and there is no
 instance number to renumber, so the repo is simply the source of truth.
 
 ```
-  lib   lib/store.py   <- scripts\lib\store.py   (new: Import as Game Library)
+  lib   lib/store.py   <- scripts\phase02\lib\store.py   (new: Import as Game Library)
+```
+
+Libraries are phase-scoped and resolved **per file** along the same chain as scripts, so
+a new phase can rewrite one helper and inherit the rest. A library the active phase does
+not provide but the save still holds is reported and left alone — the game tracks it in
+`libraryScripts` and an older script may still import it:
+
+```
+  lib   lib/orbital.py   in the save but not in phase02 (only phase03); left alone
 ```
 
 A file new to the save needs one in-game step, as that note says: the editor offers
@@ -185,6 +218,6 @@ game never observes a half-written script.
 --no-renumber      Copy verbatim; do not rewrite the script's own id
 --magic            Fill marker (default xyz); empty string disables
 --pull-magic       Pull marker (default zyx); empty string disables
---variant          Default variant for groups with no .current file
+--phase            Phase being played (phase03, p3, 3); overrides scripts/.current
 --poll             Poll instead of filesystem events (watch only)
 ```

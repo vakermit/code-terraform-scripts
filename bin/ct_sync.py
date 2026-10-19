@@ -5,6 +5,8 @@ The game creates a script file the moment you add a script slot to a machine, bu
 leaves it empty. This watches the save directory and, whenever such an empty `.py`
 appears, fills it with the matching script from this repo's `scripts/` tree.
 
+    python bin/ct_sync.py phases          # the phases in the tree, and what each covers
+    python bin/ct_sync.py use p3          # play phase 3 from now on
     python bin/ct_sync.py status          # show what maps to what
     python bin/ct_sync.py once            # one pass over what is there now
     python bin/ct_sync.py watch           # keep running and fill files as they appear
@@ -17,12 +19,13 @@ already waiting for it.
 Matching ignores a trailing `_<number>`, so `scripts/bio/bio_lab_1.py` fills the
 save's `bio_lab_1.py`, `bio_lab_2.py`, and so on.
 
-Variants live in subdirectories: `bio/early/bio_lab_1.py` and `bio/mid/bio_lab_1.py`.
-Which one is used is decided by, most specific first: the marker (`xyz mid`), a
-`.current` file in the group directory naming a default (git-ignored), `--variant`,
-then a plain file beside the variant directories. Otherwise the slot is skipped and
-`status` lists the choices. A base with a single file is never ambiguous, so a
-variant directory can be partial.
+The tree is organised by *phase* of the playthrough: `scripts/phase02/power/solar_1.py`.
+The phase being played is decided by `--phase`, else `scripts/.current` (git-ignored,
+one line, `ct_sync.py use p3` writes it), else the highest phase present. A script the
+active phase does not have falls back to the newest earlier phase that does, and then
+to `scripts/common/`, which holds what no phase owns — so a new phase can start with
+one rewritten script and grow. `xyz p1` on a game file asks for one phase exactly.
+`scripts/<phase>/lib/` is resolved the same way, per file.
 
 An empty game file with no match is copied into `scripts/_unmatched/` (untracked) so
 it is in front of you: write it, drag it into the right folder, and the watcher fills
@@ -42,7 +45,7 @@ overrides the "already has code" guard; the old contents are copied to
 
 `zyx` on the first line goes the other way: the game file is copied back into the
 matching repo script (slot id rewritten to the repo file's, previous content backed up),
-and the marker is removed from the game file. `zyx mid` targets a variant. With no
+and the marker is removed from the game file. `zyx p3` targets one phase. With no
 matching repo script the content lands in `_unmatched/`. A marked file holding no code
 is refused, since that is the one way a pull could wipe a script.
 
@@ -69,7 +72,8 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_SCRIPTS = REPO / "scripts"
 BACKUP_DIR = REPO / ".ct-sync-backups"
 UNMATCHED = "_unmatched"            # under scripts/; staged, never a source
-CURRENT = ".current"                # per-directory variant pointer; git-ignored
+CURRENT = ".current"                # scripts/.current: the phase being played; git-ignored
+COMMON = "common"                   # phase-independent scripts (contracts, one-offs)
 LIB = "lib"                         # shared Library scripts, mirrored repo -> save
 SAVE_GLOB = "save_*_scripts"
 GAME_DIR = "io.codeterraform.game"
@@ -96,11 +100,19 @@ class Options:
     renumber: bool = True
     magic: str = DEFAULT_MAGIC
     pull: str = DEFAULT_PULL
-    variant: str = ""
+    phase: Optional[int] = None         # the phase being played
+    phase_how: str = ""                 # where that came from, for reporting
+    phases: tuple = ()                  # every phase present in the tree, ascending
+    phase_arg: str = ""                 # --phase as given, so a re-resolve keeps it
 
     @property
     def unmatched_dir(self) -> Path:
         return self.scripts_dir / UNMATCHED
+
+    @property
+    def chain(self) -> tuple:
+        """Lookup order for the active phase: itself, earlier phases, then common."""
+        return phase_chain(self.phase, self.phases)
 
 
 def show(path: Path) -> str:
@@ -192,84 +204,174 @@ def other_numbered_ids(text: str, own_base: str):
     return sorted({t for t in NUMBERED_ID.findall(text) if base_name(t) != own_base})
 
 
+# --------------------------------------------------------------------- phases
+# A phase is a stage of the playthrough, and the top-level axis of `scripts/`:
+# `scripts/phase02/power/solar_1.py`. The number orders them, so an older phase is
+# the natural fallback for a newer one that has not been rewritten yet. Anything
+# outside a phase directory (`scripts/common/contract/lattice.py`) is phase-independent
+# and sits at the end of every lookup chain.
+PHASE_DIR = re.compile(r"^(?:phase|p)[-_ ]?(\d+)(?:[-_].*)?$", re.IGNORECASE)
+PHASE_WORD = re.compile(r"^(?:phase|p)?[-_ ]?(\d+)$", re.IGNORECASE)
+
+
+def parse_phase_dir(name: str) -> Optional[int]:
+    """`phase02` / `phase2` / `p2` / `phase02-orbital` -> 2. Anything else -> None."""
+    m = PHASE_DIR.match(name)
+    return int(m.group(1)) if m else None
+
+
+def parse_phase_word(word: str) -> Optional[int]:
+    """As above but also bare `2` — for `.current`, `--phase` and the marker."""
+    m = PHASE_WORD.match(word.strip())
+    return int(m.group(1)) if m else None
+
+
+def phase_label(n: Optional[int]) -> str:
+    return COMMON if n is None else "phase%02d" % n
+
+
+def discover_phases(scripts_dir: Path) -> tuple:
+    """Every phase directory present, ascending. Directory names need not be padded."""
+    found = set()
+    for child in scripts_dir.iterdir() if scripts_dir.is_dir() else []:
+        if child.is_dir():
+            n = parse_phase_dir(child.name)
+            if n is not None:
+                found.add(n)
+    return tuple(sorted(found))
+
+
+def phase_dir(scripts_dir: Path, n: Optional[int]) -> Optional[Path]:
+    """The directory holding phase `n`, whatever it is named. `None` means common/."""
+    if n is None:
+        return scripts_dir / COMMON
+    for child in sorted(scripts_dir.iterdir()) if scripts_dir.is_dir() else []:
+        if child.is_dir() and parse_phase_dir(child.name) == n:
+            return child
+    return None
+
+
+def phase_chain(active: Optional[int], phases) -> tuple:
+    """Lookup order: the active phase, then every earlier one, then common (None).
+
+    Falling back is what makes a part-written phase usable: put the three scripts you
+    have rewritten in `phase03/` and the rest still come from `phase02/`. When the
+    rewrite is finished the phase is self-contained and nothing falls through.
+    """
+    if active is None:
+        return (None,)
+    earlier = sorted((p for p in phases if p < active), reverse=True)
+    return (active,) + tuple(earlier) + (None,)
+
+
+def read_current(scripts_dir: Path):
+    """The phase named by `scripts/.current`. Returns (number, raw text) or (None, raw)."""
+    try:
+        raw = (scripts_dir / CURRENT).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None, ""
+    return parse_phase_word(raw), raw
+
+
+def resolve_phase(scripts_dir: Path, override: str):
+    """Decide which phase is being played. Returns (number, how, phases).
+
+    Most specific first: `--phase`, then `scripts/.current`, then the highest phase
+    present. The last is a default rather than an error because `.current` is
+    per-playthrough state and so git-ignored: a fresh clone has none, and the newest
+    phase is nearly always the one being played. Every command prints which it chose.
+    """
+    phases = discover_phases(scripts_dir)
+    if override:
+        n = parse_phase_word(override)
+        if n is None:
+            err("--phase %r is not a phase name (try phase03, p3 or 3)." % override)
+            raise typer.Exit(2)
+        return n, "--phase", phases
+    n, raw = read_current(scripts_dir)
+    if raw:
+        if n is None:
+            err("%s says %r, which is not a phase name (try phase03, p3 or 3)."
+                % (show(scripts_dir / CURRENT), raw))
+            raise typer.Exit(2)
+        return n, show(scripts_dir / CURRENT), phases
+    if phases:
+        return phases[-1], "highest present", phases
+    return None, "no phases in tree", phases
+
+
+# -------------------------------------------------------------------- grouping
 @dataclass
 class Group:
-    """Every repo script sharing one base name, keyed by variant.
+    """Every repo script sharing one base name, keyed by the phase it belongs to.
 
-    Variants are subdirectories: `bio/early/bio_lab_1.py` and `bio/mid/bio_lab_1.py`
-    are variants `early` and `mid` of `bio_lab`, rooted at `bio/`. A file sitting
-    directly in the root (`bio/bio_lab_1.py`) has the empty tag and is the implicit
-    default. A base with a single candidate is never ambiguous, whatever its path —
-    so a variant directory can start with one file and grow.
+    `phase01/bio/bio_lab_1.py` and `phase02/bio/bio_lab_1.py` are the phase 1 and
+    phase 2 versions of `bio_lab`; `common/contract/lattice.py` is keyed `None` and
+    serves every phase. One file per base per phase — two in the same phase is an
+    ambiguity the tool refuses rather than guesses at.
     """
     base: str
-    root: Path
-    candidates: dict                 # tag -> path
+    candidates: dict                 # phase number (or None for common) -> path
 
     @property
     def tags(self):
-        return sorted(t for t in self.candidates if t)
+        """Phase labels this base exists in, oldest first, common last."""
+        return [phase_label(k) for k in sorted((k for k in self.candidates if k is not None))] + \
+               ([COMMON] if None in self.candidates else [])
 
     @property
     def only(self):
         return next(iter(self.candidates.values())) if len(self.candidates) == 1 else None
 
-    def current(self) -> str:
-        """The tag named by `<root>/.current`, if any."""
-        try:
-            return (self.root / CURRENT).read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
+    def select(self, want: Optional[int], opts: "Options"):
+        """Pick a path for the active phase. Returns (path, how) or (None, why).
 
-    def select(self, want: Optional[str], default: str):
-        """Pick a path. Returns (path, how) or (None, why)."""
-        if self.only is not None:
-            return self.only, ""
-        if want:
+        A marker (`xyz p1`) names one phase exactly and fails loudly when that phase
+        has no version of this script — it is an explicit request about one slot, and
+        quietly serving a different phase would defeat the point of asking.
+        """
+        if want is not None:
             if want in self.candidates:
-                return self.candidates[want], "variant %s (marker)" % want
-            return None, "no variant %r (have: %s)" % (want, ", ".join(self.tags))
-        cur = self.current()
-        if cur:
-            if cur in self.candidates:
-                return self.candidates[cur], "variant %s (.current)" % cur
-            return None, ".current says %r, but %s has only: %s" % (cur, self.base, ", ".join(self.tags))
-        if default and default in self.candidates:
-            return self.candidates[default], "variant %s (--variant)" % default
-        if "" in self.candidates:
-            return self.candidates[""], "untagged default"
-        return None, "variants: %s (set %s or use %s)" % (
-            ", ".join(self.tags), show(self.root / CURRENT), "the marker")
+                return self.candidates[want], "%s (marker)" % phase_label(want)
+            return None, "no %s version of %s (have: %s)" % (
+                phase_label(want), self.base, ", ".join(self.tags))
+        for n in opts.chain:
+            if n in self.candidates:
+                how = phase_label(n)
+                if n != opts.phase:
+                    how += " (inherited)"
+                return self.candidates[n], how
+        return None, "nothing for %s; %s exists only in %s" % (
+            phase_label(opts.phase), self.base, ", ".join(self.tags))
 
 
 def build_index(scripts_dir: Path):
     """Map base name -> Group. Returns (index, conflicts).
 
     `_unmatched/` is skipped: it holds files staged *for* writing, and treating them
-    as sources would fill an empty game file with an empty repo file.
+    as sources would fill an empty game file with an empty repo file. `lib/` is
+    skipped too — libraries are mirrored, not slot-matched.
     """
     by_base = {}
     for path in sorted(scripts_dir.rglob("*.py")):
         parts = path.relative_to(scripts_dir).parts
         if UNMATCHED in parts or LIB in parts:
             continue                    # staged files, and libraries (mirrored, not matched)
-        by_base.setdefault(base_name(path.stem), []).append(path)
+        phase = parse_phase_dir(parts[0]) if len(parts) > 1 else None
+        by_base.setdefault(base_name(path.stem), []).append((phase, path))
 
     index, conflicts = {}, {}
-    for base, paths in by_base.items():
-        root = Path(os.path.commonpath([str(p.parent) for p in paths]))
+    for base, found in by_base.items():
         candidates, clash = {}, []
-        for p in paths:
-            rel = p.parent.relative_to(root).parts
-            tag = rel[0] if rel else ""
-            if tag in candidates:
-                clash.append(p)             # two files, same variant, same base
+        for phase, p in found:
+            if phase in candidates:
+                clash.append(p)             # two files, same phase, same base
             else:
-                candidates[tag] = p
+                candidates[phase] = p
         if clash:
             conflicts[base] = sorted(list(candidates.values()) + clash)
         else:
-            index[base] = Group(base, root, candidates)
+            index[base] = Group(base, candidates)
     return index, conflicts
 
 
@@ -330,24 +432,31 @@ def _unquote_marker(line: str) -> str:
 
 
 def parse_magic(text: str, magic: str):
-    """(marked, variant) from the file's first real line.
+    """(marked, phase, unparsed) from the file's first real line.
 
     The game does not always create the empty file, so this is the manual way in:
     make the file yourself with `xyz` at the top and it becomes fillable. Accepted
     bare, commented, or quoted — `xyz`, `# xyz`, `"xyz"`, `\"\"\"xyz\"\"\"` — because
-    which one you type should not matter. `xyz mid` (also `xyz-mid`, `xyz:mid`)
-    additionally asks for the `mid` variant of the script.
+    which one you type should not matter. `xyz p1` (also `xyz-p1`, `xyz:phase01`)
+    additionally asks for one phase's version of the script.
+
+    A word that is not a phase name comes back as `unparsed` so the caller can say
+    so: a marker that asks for something is worth an error, not a silent default.
     """
     if not magic:
-        return False, None
+        return False, None, None
     _, line = _first_real_line(text)
     if line is None:
-        return False, None
+        return False, None, None
     token = _unquote_marker(line)
     if token.lower() == magic.lower():
-        return True, None
+        return True, None, None
     m = re.match(re.escape(magic) + r"[\s\-:/]+([A-Za-z0-9_][\w-]*)$", token, re.IGNORECASE)
-    return (True, m.group(1)) if m else (False, None)
+    if not m:
+        return False, None, None
+    word = m.group(1)
+    n = parse_phase_word(word)
+    return (True, n, None) if n is not None else (True, None, word)
 
 
 def has_magic(text: str, magic: str) -> bool:
@@ -405,7 +514,7 @@ def tidy_unmatched(index, opts: Options) -> None:
         group = index.get(base_name(path.stem))
         if group is None:
             continue
-        matched, _ = group.select(None, opts.variant)
+        matched, _ = group.select(None, opts)
         if matched is None:
             continue                      # exists but unresolved: leave the stage copy
         text = read(path)
@@ -441,7 +550,7 @@ def write_atomic(path: Path, body: str) -> bool:
         return False
 
 
-def pull_file(path: Path, text: str, want: Optional[str], index, opts: Options) -> bool:
+def pull_file(path: Path, text: str, want: Optional[int], index, opts: Options) -> bool:
     """Copy a game file marked `zyx` back into the repo, then drop the marker.
 
     The reverse of a fill: the game's slot id is rewritten to the repo file's
@@ -456,7 +565,7 @@ def pull_file(path: Path, text: str, want: Optional[str], index, opts: Options) 
 
     group = index.get(base_name(path.stem))
     if group is not None:
-        target, how = group.select(want, opts.variant)
+        target, how = group.select(want, opts)
         if target is None:
             warn("  skip  %-28s %s" % (path.name, how))
             return False
@@ -500,10 +609,16 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
     text = read(path)
     if text is None:
         return False
-    pulled, want = parse_magic(text, opts.pull)
+    pulled, want, bad = parse_magic(text, opts.pull)
     if pulled:
+        if bad:
+            warn("  skip  %-28s %r is not a phase name" % (path.name, "%s %s" % (opts.pull, bad)))
+            return False
         return pull_file(path, text, want, index, opts)
-    marked, want = parse_magic(text, opts.magic)
+    marked, want, bad = parse_magic(text, opts.magic)
+    if marked and bad:
+        warn("  skip  %-28s %r is not a phase name" % (path.name, "%s %s" % (opts.magic, bad)))
+        return False
     if not marked and not is_empty(text, opts.strict):
         if not quiet_skips:
             typer.echo("  skip  %-28s already has code" % path.name)
@@ -521,9 +636,9 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
         stage_unmatched(path, text, opts)
         return False
 
-    source, how = group.select(want, opts.variant)
+    source, how = group.select(want, opts)
     if source is None:
-        # Several variants and nothing chose between them. A marked file asked
+        # No version of this script for the phase being played. A marked file asked
         # explicitly, so always say why; otherwise only when verbose.
         if marked or not quiet_skips:
             warn("  skip  %-28s %s" % (path.name, how))
@@ -564,8 +679,26 @@ def sync_file(path: Path, index, opts: Options, quiet_skips: bool = True) -> boo
     return True
 
 
+def lib_index(scripts_dir: Path):
+    """Map library file name -> {phase: path}.
+
+    Libraries are phase-scoped like everything else: `phase02/lib/power.py` and
+    `phase03/lib/power.py` are two versions of one library, and `common/lib/` holds
+    any that outlive a phase. Resolution is per file, so a new phase can rewrite one
+    helper and inherit the rest.
+    """
+    found = {}
+    for path in sorted(scripts_dir.rglob("*.py")):
+        parts = path.relative_to(scripts_dir).parts
+        if LIB not in parts or UNMATCHED in parts:
+            continue
+        phase = parse_phase_dir(parts[0]) if len(parts) > 1 else None
+        found.setdefault(path.name, {}).setdefault(phase, path)
+    return found
+
+
 def sync_libs(opts: Options) -> int:
-    """Mirror repo `scripts/lib/*.py` into the save's `lib/`.
+    """Mirror the active phase's `lib/*.py` into the save's `lib/`.
 
     Libraries are not slot-filling: the game never creates an empty one for us and
     there is no instance number to renumber, so this is a straight mirror with the
@@ -575,16 +708,21 @@ def sync_libs(opts: Options) -> int:
     A file new to the save still needs one in-game step: the editor offers
     "Import as Game Library" for an unregistered file under lib/.
     """
-    src_dir = opts.scripts_dir / LIB
-    if not src_dir.is_dir():
+    libs = lib_index(opts.scripts_dir)
+    if not libs:
         return 0
     dst_dir = opts.save_dir / LIB
     written = 0
-    for src in sorted(src_dir.glob("*.py")):
+    chosen = {}
+    for name, versions in sorted(libs.items()):
+        src = next((versions[n] for n in opts.chain if n in versions), None)
+        if src is None:
+            continue                      # exists, but not for the phase being played
+        chosen[name] = src
         body = read(src)
         if body is None:
             continue
-        dst = dst_dir / src.name
+        dst = dst_dir / name
         current = read(dst) if dst.exists() else None
         if current == body:
             continue
@@ -602,10 +740,29 @@ def sync_libs(opts: Options) -> int:
         dst_dir.mkdir(parents=True, exist_ok=True)
         if write_atomic(dst, body):
             new_file = current is None
-            ok("  lib   %-28s <- %s%s" % (LIB + "/" + src.name, show(src),
+            ok("  lib   %-28s <- %s%s" % (LIB + "/" + name, show(src),
                                           "   (new: Import as Game Library)" if new_file else ""))
             written += 1
+    report_stale_libs(libs, chosen, opts)
     return written
+
+
+def report_stale_libs(libs, chosen, opts: Options) -> None:
+    """Name save libraries the active phase does not provide.
+
+    Switching phases rewrites the libraries it has in common and leaves the rest
+    behind. They are never deleted — the game tracks them in `libraryScripts` and
+    an old script may still import one — but a stale helper is worth knowing about.
+    """
+    dst_dir = opts.save_dir / LIB
+    if not dst_dir.is_dir():
+        return
+    for dst in sorted(dst_dir.glob("*.py")):
+        if dst.name in chosen or dst.name not in libs:
+            continue                      # ours and current, or not ours at all
+        where = ", ".join(phase_label(n) for n in sorted(libs[dst.name], key=lambda k: (k is None, k)))
+        warn("  lib   %-28s in the save but not in %s (only %s); left alone"
+             % (LIB + "/" + dst.name, phase_label(opts.phase), where))
 
 
 def sync_all(index, opts: Options) -> int:
@@ -633,40 +790,114 @@ MagicOpt = typer.Option(DEFAULT_MAGIC, "--magic", envvar="CT_MAGIC",
 PullOpt = typer.Option(DEFAULT_PULL, "--pull-magic", envvar="CT_PULL_MAGIC",
                        help="Marker that copies a game file back into the repo. "
                             "Empty string disables it.")
-VariantOpt = typer.Option("", "--variant", envvar="CT_VARIANT",
-                          help="Default variant (subdirectory) when a script has several "
-                               "and no .current file or marker chooses.")
+PhaseOpt = typer.Option("", "--phase", envvar="CT_PHASE",
+                        help="Phase being played (phase03, p3, 3). Overrides "
+                             "scripts/.current; otherwise the highest phase present.")
 
 
 def make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic,
-              variant="", pull=DEFAULT_PULL) -> Options:
+              phase="", pull=DEFAULT_PULL) -> Options:
     save = resolve_save(save_dir)
     if not scripts_dir.is_dir():
         err("Not a directory: %s" % scripts_dir)
         raise typer.Exit(2)
-    return Options(save, scripts_dir, strict, dry_run, verbose, not no_renumber, magic, pull, variant)
+    n, how, phases = resolve_phase(scripts_dir, phase)
+    return Options(save, scripts_dir, strict, dry_run, verbose, not no_renumber, magic, pull,
+                   n, how, phases, phase)
+
+
+def phase_banner(opts: Options) -> str:
+    """One line naming the phase in force and what falls back to what."""
+    if opts.phase is None:
+        return "Phase    none (%s); only %s/ is used" % (opts.phase_how, COMMON)
+    rest = [phase_label(n) for n in opts.chain[1:]]
+    return "Phase    %s (%s)%s" % (phase_label(opts.phase), opts.phase_how,
+                                   "  falling back to " + " -> ".join(rest) if rest else "")
+
+
+@app.command()
+def phases(scripts_dir: Path = ScriptsOpt, phase: str = PhaseOpt):
+    """List the phases in the tree and what each one covers."""
+    n, how, found = resolve_phase(scripts_dir, phase)
+    index, conflicts = build_index(scripts_dir)
+    libs = lib_index(scripts_dir)
+    opts = Options(Path("."), scripts_dir, phase=n, phase_how=how, phases=found)
+
+    typer.echo("\n" + phase_banner(opts))
+    typer.echo("\n  %-10s %7s %5s   %s" % ("phase", "scripts", "libs", "directory"))
+    for p in list(found) + [None]:
+        own = sum(1 for g in index.values() if p in g.candidates)
+        own_libs = sum(1 for v in libs.values() if p in v)
+        if p is None and not own and not own_libs:
+            continue
+        typer.echo("  %-10s %7d %5d   %s%s"
+                   % (phase_label(p), own, own_libs, show(phase_dir(scripts_dir, p)),
+                      "   <- playing" if p == n else ""))
+
+    if n is None:
+        typer.echo("")
+        return
+    own, inherited, shared, missing = 0, [], 0, []
+    for base, group in sorted(index.items()):
+        src, _ = group.select(None, opts)
+        if src is None:
+            missing.append(base)
+        elif n in group.candidates:
+            own += 1
+        else:
+            from_phase = next(k for k in opts.chain if k in group.candidates)
+            if from_phase is None:
+                shared += 1               # common/ is not a fallback, it is shared on purpose
+            else:
+                inherited.append((base, from_phase))
+    typer.echo("\n%s resolves %d of %d script(s): %d its own, %d inherited, %d shared from %s/."
+               % (phase_label(n), len(index) - len(missing), len(index),
+                  own, len(inherited), shared, COMMON))
+    for base, src in inherited:
+        typer.echo("  inherit  %-24s from %s  (not rewritten for %s yet)"
+                   % (base, phase_label(src), phase_label(n)))
+    for base in missing:
+        warn("  missing  %-24s exists only in %s" % (base, ", ".join(index[base].tags)))
+    report_conflicts(conflicts)
+    typer.echo("")
+
+
+@app.command()
+def use(name: str = typer.Argument(..., help="Phase to play: phase03, p3 or 3."),
+        scripts_dir: Path = ScriptsOpt):
+    """Write `scripts/.current`, pinning the phase every command then uses."""
+    n = parse_phase_word(name)
+    if n is None:
+        err("%r is not a phase name (try phase03, p3 or 3)." % name)
+        raise typer.Exit(2)
+    found = discover_phases(scripts_dir)
+    target = scripts_dir / CURRENT
+    target.write_text(phase_label(n) + "\n", encoding="utf-8", newline="\n")
+    ok("%s -> %s" % (show(target), phase_label(n)))
+    if n not in found:
+        warn("No %s directory yet: everything falls back until you add one at %s"
+             % (phase_label(n), show(scripts_dir / phase_label(n))))
 
 
 @app.command()
 def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
            strict: bool = StrictOpt, no_renumber: bool = NoRenumberOpt,
-           magic: str = MagicOpt, variant: str = VariantOpt, pull: str = PullOpt):
+           magic: str = MagicOpt, phase: str = PhaseOpt, pull: str = PullOpt):
     """Show the repo-to-save mapping and what each save script would do."""
-    opts = make_opts(save_dir, scripts_dir, strict, False, False, no_renumber, magic, variant, pull)
+    opts = make_opts(save_dir, scripts_dir, strict, False, False, no_renumber, magic, phase, pull)
     index, conflicts = build_index(opts.scripts_dir)
 
+    typer.echo("\n" + phase_banner(opts))
     typer.echo("\nRepo scripts (%d):" % len(index))
     for key, group in sorted(index.items()):
-        if group.only is not None:
-            typer.echo("  %-24s %s" % (key, show(group.only)))
+        chosen, how = group.select(None, opts)
+        if len(group.candidates) == 1 and chosen is not None:
+            typer.echo("  %-24s %s" % (key, show(chosen)))
             continue
-        chosen, how = group.select(None, opts.variant)
-        chosen_tag = next((t for t, p in group.candidates.items() if p == chosen), None)
-        labels = []
-        for tag in sorted(group.candidates):
-            name = tag or "(untagged)"
-            labels.append("[%s]" % name if tag == chosen_tag else name)
-        typer.echo("  %-24s variants: %s" % (key, ", ".join(labels)))
+        chosen_key = next((k for k, p in group.candidates.items() if p == chosen), "none")
+        labels = ["[%s]" % phase_label(k) if k == chosen_key else phase_label(k)
+                  for k in sorted(group.candidates, key=lambda k: (k is None, k))]
+        typer.echo("  %-24s %s" % (key, ", ".join(labels)))
         typer.echo("  %-24s   -> %s" % ("", "%s  (%s)" % (show(chosen), how) if chosen else how))
     report_conflicts(conflicts)
 
@@ -683,17 +914,19 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
     for path in files:
         text = read(path) or ""
         group = index.get(base_name(path.stem))
-        pulled, pull_want = parse_magic(text, opts.pull)
-        marked, want = parse_magic(text, opts.magic)
+        pulled, pull_want, pull_bad = parse_magic(text, opts.pull)
+        marked, want, bad = parse_magic(text, opts.magic)
         fillable = marked or is_empty(text, opts.strict)
-        source, how = group.select(want, opts.variant) if group else (None, None)
-        if pulled:
+        source, how = group.select(want, opts) if group else (None, None)
+        if bad or pull_bad:
+            state = "marker names %r, which is not a phase" % (bad or pull_bad)
+        elif pulled:
             if is_empty(strip_magic(text, opts.pull), False):
                 state = "marked %r but holds no code; nothing to pull" % opts.pull
             elif group is None:
                 state = "marked %r -> would pull to %s" % (opts.pull, show(opts.unmatched_dir / path.name))
             else:
-                target, phow = group.select(pull_want, opts.variant)
+                target, phow = group.select(pull_want, opts)
                 state = ("marked %r -> would pull to %s%s" % (opts.pull, show(target), "  [%s]" % phow if phow else "")
                          if target else "marked %r, unresolved: %s" % (opts.pull, phow))
         elif not fillable:
@@ -719,12 +952,13 @@ def status(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
 def once(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
          strict: bool = StrictOpt, dry_run: bool = DryOpt, verbose: bool = VerboseOpt,
          no_renumber: bool = NoRenumberOpt, magic: str = MagicOpt,
-         variant: str = VariantOpt, pull: str = PullOpt):
+         phase: str = PhaseOpt, pull: str = PullOpt):
     """Fill every empty script that is already in the save directory."""
-    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, variant, pull)
+    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, phase, pull)
     index, conflicts = build_index(opts.scripts_dir)
     report_conflicts(conflicts)
     typer.echo("Syncing %s" % opts.save_dir)
+    typer.echo(phase_banner(opts))
     n = sync_all(index, opts)
     typer.echo("%s %d file(s)." % ("Would sync" if dry_run else "Synced", n))
 
@@ -761,8 +995,17 @@ class Watcher:
         self.repo_due = time.monotonic() + self.delay
 
     def rebuild(self):
-        """Re-read the repo tree, report what moved, and re-sweep."""
+        """Re-read the repo tree, report what moved, and re-sweep.
+
+        The phase is re-resolved too: editing `scripts/.current` is how you move the
+        whole playthrough forward, and it should take effect without a restart.
+        """
         before = self.index
+        was = (self.opts.phase, self.opts.phases)
+        self.opts.phase, self.opts.phase_how, self.opts.phases = \
+            resolve_phase(self.opts.scripts_dir, self.opts.phase_arg)
+        if (self.opts.phase, self.opts.phases) != was:
+            ok("  " + phase_banner(self.opts))
         self.index, self.conflicts = build_index(self.opts.scripts_dir)
 
         def paths(group):
@@ -822,17 +1065,18 @@ class Events(FileSystemEventHandler):
 def watch(save_dir: Optional[Path] = SaveOpt, scripts_dir: Path = ScriptsOpt,
           strict: bool = StrictOpt, dry_run: bool = DryOpt, verbose: bool = VerboseOpt,
           no_renumber: bool = NoRenumberOpt, magic: str = MagicOpt,
-          variant: str = VariantOpt, pull: str = PullOpt,
+          phase: str = PhaseOpt, pull: str = PullOpt,
           poll: bool = typer.Option(False, "--poll",
                                     help="Poll instead of using filesystem events.")):
     """Watch the save directory, and the repo scripts, and fill as things appear."""
-    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, variant, pull)
+    opts = make_opts(save_dir, scripts_dir, strict, dry_run, verbose, no_renumber, magic, phase, pull)
     watcher = Watcher(opts)
     if not watcher.index:
         err("No scripts found under %s." % opts.scripts_dir)
         raise typer.Exit(2)
 
     typer.echo("Save     %s" % opts.save_dir)
+    typer.echo(phase_banner(opts))
     typer.echo("Scripts  %s (%d, watched for adds, edits and renames)"
                % (opts.scripts_dir, len(watcher.index)))
     typer.echo("Staging  %s for game files with no match" % show(opts.unmatched_dir))
