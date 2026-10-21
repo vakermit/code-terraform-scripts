@@ -1,0 +1,13 @@
+# Which Control Room card belongs in which slot.
+#
+# The game numbers cards by their position in the room -- panel_1, panel_2 -- so a
+# slot id says nothing about which card it is, and name matching would hand every
+# card the same file. These lines say what each slot actually holds. Paths are from
+# the root of scripts/, and a mapped slot is copied verbatim: the number is a
+# position in the room, not a machine instance, so there is no id to point at it.
+#
+# bin/README.md "Naming a slot" has the rest, including how a later phase overrides
+# one line of this file and leaves the others alone.
+
+[slots]
+panel_1 = "phase02/control_room/controller.py"
