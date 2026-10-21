@@ -2,10 +2,10 @@
 task: "Phase 3 — full base automation platform for Code: Terraform"
 slug: 20261019-150000_phase03-automation-platform
 project: code-terraform-game
-phase: scoping
-progress: 0/47
+phase: climbing
+progress: 15/48
 started: 2026-10-19T15:00:00Z
-updated: 2026-10-19T15:00:00Z
+updated: 2026-10-19T17:05:00Z
 principal_stated_goal: "then we will do a full rewrite for the next phase (3?)"
 principal_stated_goal_source: conversation
 principal_stated_goal_signal: 4
@@ -68,13 +68,13 @@ I leave the base for an hour of real time and come back to find it further along
 
 ## Goal
 
-"then we will do a full rewrite for the next phase (3?)" — rewrite the script tree as `scripts/phase03/`, where four Automations form a one-directional pipeline (safety publishes an envelope, the planner allocates within it and ranks what to shed, logistics and opportunity execute), machines self-throttle to broadcast leases and fall back to their own declared fail-safe, the planner learns what each scarce unit buys in Terraform Points and spends accordingly, and every allocation is explainable from a decision trace on a card. Done means the base runs unattended through a brownout threat, a well going dormant and a storm window without operator intervention, and that each of those events is legible afterwards.
+"then we will do a full rewrite for the next phase (3?)" — rewrite the script tree as `scripts/phase03/`, where four Automations form a one-directional pipeline (safety publishes an envelope, the planner allocates within it and ranks what to shed, logistics and opportunity execute), machines self-throttle to broadcast leases and fall back to their own declared fail-safe, the planner learns what each scarce unit buys and spends accordingly — ranking whatever is actually contended at the current tier, which is ingots and vehicle time now and water and steam once Mk III exists — and every allocation is explainable from a decision trace on a card. Done means the base runs unattended through a brownout threat, a well going dormant and a storm window without operator intervention, and that each of those events is legible afterwards.
 
 ## Not yet specified
 
-- fog: how an Automation appears in the save's external-editor directory, and whether `ct_sync` can reach it at all — no Automation exists in the save yet, so the deployment path for the kernel itself is unverified. Resolves by creating one in game and inspecting the directory and `codeterraform-scripts.json`.
 - fog: what the planner's value function should do with a pillar that is already complete but whose machines still feed the carbon cycle — the docs warn against shutting such a supply down, but give no reading that distinguishes it. Resolves by finding whether `pillars()` or `atmosphere` exposes the coupling.
 - fog: whether Insight spending can be ranked at all before a second colony exists, since the curve is cumulative and shared. Resolves once two colonies are founded and `get_insight()` can be sampled against population.
+- fog: whether credits-per-ingot from an order's reward divided by its requirement is a good enough price for the `credits` outcome, or whether it has to be discounted against how long the order takes to fill. Resolves by measuring one order end to end.
 - fog: how to estimate a Pioneer-hour's cost well enough to allocate it as a currency — phase 2's scout library remembers real trip costs, but not in a form the planner can price against water. Resolves by instrumenting one construction round trip and reading the recorded cost back.
 - fog: whether the four loops can each complete a pass inside their cadence at late-game machine counts, given a per-tick step budget and no documented step count. Resolves by measuring a full planner pass against `clock` once the base is large.
 
@@ -86,23 +86,23 @@ I leave the base for an hour of real time and come back to find it further along
 | --- | --- | --- | --- | --- | --- |
 | ISC-1 | bash | every phase03 script parses | 0 errors | `bash tools/check-syntax.sh scripts/phase03` | literal |
 | ISC-2 | bash | ct_sync resolves every save slot under phase03 | 0 unresolved | `python bin/ct_sync.py status --phase 3` | literal |
-| ISC-3 | bash | no phase03 script hard-codes a machine id | 0 matches | `bash tools/check-no-hardcoded-ids.sh` | derived: discovery-by-enumeration |
-| ISC-4 | bash | every component handle is None-checked before use | 0 unguarded | `bash tools/check-capability-probes.sh` | derived: capability-probing |
+| ISC-3 | bash | no phase03 script hard-codes a machine id | 0 matches | `bash tools/check-phase03.sh ids` | derived: discovery-by-enumeration |
+| ISC-4 | bash | no component handle is dereferenced inline | 0 matches | `bash tools/check-phase03.sh probes` | derived: capability-probing |
 | ISC-5 | manual | a second kernel start changes no state | 0 archive diffs | `start, snapshot keys, restart, compare` | derived: restart-idempotence |
 | ISC-6 | manual | kernel runs with the Data Archive absent | runs, logs degraded | `force notebook None, observe console` | derived: capability-probing |
 | ISC-7 | manual | kernel runs with the Signal Bus absent | every machine at fail-safe | `force comms None, observe machines` | derived: capability-probing |
 | ISC-8 | manual | a lease whose age is None is treated as stale | fail-safe fires | `save, reload, observe the restored broadcast` | derived: freshness |
-| ISC-9 | bash | no clear call is made with an empty prefix | 0 matches | `bash tools/check-no-wipe.sh` | derived: destructive-guard |
-| ISC-10 | bash | no self-only method is called through a remote handle | 0 matches | `bash tools/check-no-remote-actuation.sh` | derived: govern-not-drive |
+| ISC-9 | bash | no clear call is made with an empty prefix | 0 matches | `bash tools/check-phase03.sh wipe` | derived: destructive-guard |
+| ISC-10 | bash | no self-only method is called through a remote handle | 0 matches | `bash tools/check-phase03.sh actuation` | derived: govern-not-drive |
 | ISC-11 | manual | a water-fed Mk III generator throttles to its lease | throttle tracks lease | `set a lease by hand on the bus, read the throttle` | literal |
 | ISC-12 | manual | oxygen holds last good setpoint when kernel silent | no idle | `stop all automations, observe oxygen output` | derived: fail-safe-direction |
 | ISC-13 | manual | smelter idles when kernel silent | throttle 0 | `stop all automations, observe the smelter` | derived: fail-safe-direction |
-| ISC-14 | bash | FAIL_SAFE is declared in every machine script | 1 per script | `bash tools/check-fail-safe-declared.sh` | derived: fail-safe-direction |
+| ISC-14 | bash | FAIL_SAFE is declared in every machine script | 1 per script | `bash tools/check-phase03.sh fail-safe` | derived: fail-safe-direction |
 | ISC-15 | manual | the envelope names watts, tonnes and reserve | 3 fields present | `read the envelope broadcast` | literal |
 | ISC-16 | manual | one allocation dict is published per outpost | 1 per outpost | `list channels and count` | literal |
-| ISC-17 | manual | projected load stays under generation minus reserve | 0 brownouts in 24h | `run 24 world hours, read the trace` | literal |
+| ISC-17 | manual | autonomy holds above the floor overnight | 0 brownouts, 0 dusk sheds | `run 24 world hours through a night, read the trace` | literal |
 | ISC-18 | manual | the wattage table converges on measurement | within 10% observed | `compare the archive table to power total()` | derived: measure-not-assume |
-| ISC-19 | manual | a shed machine is restored when headroom returns | powered within one pass | `force a deficit, then relieve it` | derived: no-stranded-machines |
+| ISC-19 | manual | only machines safety shed are restored | operator-off untouched | `force a deficit, then relieve it` | derived: no-stranded-machines |
 | ISC-20 | manual | life support is never shed first | ranks last | `force a deficit, read the shed sequence` | derived: fail-safe-direction |
 | ISC-21 | manual | allocation shifts toward the largest pillar gap | follows the gap | `starve one pillar, observe the next allocation` | literal |
 | ISC-22 | manual | the rate table is seeded and tagged with confidence | every entry tagged | `read the table before any measurement` | derived: measure-not-assume |
@@ -118,12 +118,13 @@ I leave the base for an hour of real time and come back to find it further along
 | ISC-32 | manual | freight is preempted only on an expiring deadline | trace names it | `saturate drone hours, trigger a storm` | derived: earliest-deadline-first |
 | ISC-33 | manual | transmission fragments outlive the audible window | packets retained | `read fragments after the window closes` | derived: stateless-source |
 | ISC-34 | manual | Insight is spent from a pooled ranking | spend crosses species | `reach two colonies, observe an unlock` | literal |
+| ISC-49 | manual | every discretionary machine appears in an allocation | 0 unnamed | `compare an allocation to the enumerated consumers` | derived: pipeline-direction |
 | ISC-35 | manual | any idle machine is explained by one trace row | answer in one row | `pick an idle machine, read the card` | literal |
-| ISC-36 | manual | the trace is bounded | <=40 rows, 1 key | `read the trace key node count` | derived: archive-budget |
+| ISC-36 | manual | the trace is bounded per loop | <=40 rows, 1 key each | `read each loop's trace key node count` | derived: archive-budget |
 | ISC-37 | manual | the card renders state and issues no commands | 0 writes from the card | `read the card source, watch a full tick` | derived: cards-are-views |
 | ISC-38 | manual | each loop reaps its own prefix | 0 orphans after decommission | `decommission a machine, read archive keys` | derived: one-writer |
 | ISC-39 | manual | the Crop Automator queue head is policed | blocked head reordered | `block the head, observe the reorder` | literal |
-| ISC-40 | bash | no loop writes a key under another prefix | 0 cross-writes | `bash tools/check-prefix-ownership.sh` | derived: one-writer |
+| ISC-40 | bash | no loop writes a key under another prefix | 0 cross-writes | `bash tools/check-phase03.sh prefixes` | derived: one-writer |
 | ISC-42 | manual | an operator override survives a planner cadence | override held | `set an override, wait one full cadence` | derived: operator-first |
 | ISC-43 | manual | three events are handled unattended in one hour | all three handled | `play one hour hands-off, read the trace` | literal |
 | ISC-44 | manual | trace rows read as reasons a day later | operator judgement | `read forty rows cold, a day later` | derived: antecedent |
@@ -136,18 +137,18 @@ I leave the base for an hour of real time and come back to find it further along
 ### F0 · Cross-cutting
 Why: the properties that must hold in every script, because each one is a way the whole platform fails silently rather than loudly.
 
-- [ ] ISC-1: Every script under `scripts/phase03/` parses clean.
-- [ ] ISC-2: `ct_sync status --phase 3` resolves every save slot with no ambiguity.
-- [ ] ISC-3: No phase03 script contains a hard-coded machine id; all discovery is by enumeration.
-- [ ] ISC-4: Every component handle is probed for `None` before first use.
+- [x] ISC-1: Every script under `scripts/phase03/` parses clean.
+- [x] ISC-2: `ct_sync status --phase 3` resolves every save slot with no ambiguity.
+- [x] ISC-3: No phase03 script contains a hard-coded machine id; all discovery is by enumeration.
+- [x] ISC-4: No component handle is dereferenced inline, so an unresearched or unknown id cannot raise an AttributeError.
 - [ ] ISC-5: Each loop reloads its full state from the Archive on start, and a second start changes nothing.
 - [ ] ISC-6: The kernel runs with the Data Archive absent, logging a degraded mode rather than raising.
 - [ ] ISC-7: The kernel runs with the Signal Bus absent, holding every machine at its declared fail-safe.
 - [ ] ISC-8: Anti: no freshness check treats a `None` broadcast age as fresh.
-- [ ] ISC-9: Anti: no script clears a marker or archive family with an empty prefix.
-- [ ] ISC-10: Anti: no kernel loop invokes a self-only method through a remote handle.
+- [x] ISC-9: Anti: no script clears a marker or archive family with an empty prefix.
+- [x] ISC-10: Anti: no kernel loop invokes a self-only method through a remote handle.
 - [ ] ISC-38: Each loop reaps its own Archive prefix against a fresh enumeration.
-- [ ] ISC-40: Anti: no loop writes a key under another loop's prefix.
+- [x] ISC-40: Anti: no loop writes a key under another loop's prefix.
 - [ ] ISC-43: The base handles a brownout threat, a dormant well and a storm window across one unattended hour.
 - [ ] ISC-41: [DROPPED - duplicate of ISC-10; see Decisions 2026-10-19]
 
@@ -156,17 +157,17 @@ Why: it proves the whole stack on a single path before any of it is widened, so 
 
 - [ ] ISC-11: A water-fed Mk III generator throttles to the water figure in its lease.
 - [ ] ISC-12: The oxygen generator holds its last good setpoint when no fresh lease exists.
-- [ ] ISC-13: The smelter idles when no fresh lease exists.
-- [ ] ISC-14: `FAIL_SAFE` is declared in each machine script, not supplied by the kernel.
-- [ ] ISC-15: The safety loop publishes an envelope naming free watts, free tonnes and the reserve floor.
-- [ ] ISC-16: The planner publishes per-outpost allocation dicts keyed by machine id, one broadcast per outpost.
+- [x] ISC-13: The smelter idles when no fresh lease exists.
+- [x] ISC-14: `FAIL_SAFE` is declared in each machine script, not supplied by the kernel.
+- [x] ISC-15: The safety loop publishes an envelope naming free watts, free tonnes and the reserve floor.
+- [x] ISC-16: The planner publishes per-outpost allocation dicts keyed by machine id, one broadcast per outpost.
 
 ### F2 · The base never browns out
 Why: brownout is all-or-nothing with no consumer priority, so the only winning move is to never reach the cliff. (after: ISC-15)
 
-- [ ] ISC-17: Projected load stays under generation minus reserve across 24 world hours of normal play.
-- [ ] ISC-18: The per-machine wattage table is measured rather than assumed.
-- [ ] ISC-19: A machine the safety loop switched off is switched back on when headroom returns.
+- [ ] ISC-17: Battery autonomy at the projected deficit never falls below the floor across 24 world hours of normal play, and no brownout occurs.
+- [x] ISC-18: The per-machine wattage table is measured rather than assumed.
+- [ ] ISC-19: A machine the safety loop switched off is switched back on when headroom returns, and a machine the operator switched off is left alone.
 - [ ] ISC-20: Anti: life support is never the first thing shed.
 
 ### F3 · Scarcity goes where it earns most
@@ -199,9 +200,10 @@ Why: storm aftermath, weekly boards and Insight all expire or compound on their 
 ### F6 · I can see why
 Why: four loops allocating from a learned model is opaque in a way phase 2 never was, and per-script breakpoints cannot debug a decision spread across four scripts.
 
+- [x] ISC-49: A discretionary machine is named in every allocation, so permission is granted rather than merely not withheld.
 - [ ] ISC-35: Any machine being off is explained by one row of the decision trace.
-- [ ] ISC-36: The trace is bounded to forty rows in a single Archive key.
-- [ ] ISC-37: A card renders the envelope, the current allocation and the trace without issuing commands.
+- [x] ISC-36: The trace is bounded to forty rows per loop, each loop owning its own key.
+- [x] ISC-37: A card renders the envelope, the current allocation and the trace without issuing commands.
 - [ ] ISC-44: Antecedent: the trace rows read as reasons a day later, with the machine, the rank, the figure and the cause on one line.
 
 ### F7 · The biosphere runs itself
@@ -232,11 +234,73 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 - 2026-10-19: Vehicle time is a first-class allocated currency. Overrode a recommendation to leave it inside logistics; the planner now carries four currencies and needs learned travel costs.
 - 2026-10-19: Full rewrite including the biosphere. Overrode a recommendation to scope to the industrial tier; the phase fallback chain makes a partial landing safe, so the larger target costs no safety.
 - 2026-10-19: Sequencing is one vertical slice, then widen. Nothing else validates the pipeline before most of the code is written.
+- 2026-10-19: A pressure generator takes no quantitative lease at all, and that is a property of the machine rather than a simplification. Each sweep is a forced bet: sync() inside a roughly 4-unit window is +25%, outside is -10%, and not firing is also -10%. Throttling it does not mean producing less, it means losing 10% a sweep, which is worse than switching it off. So the only honest lever is the breaker, and the script reads its lease solely to report whether the kernel is accounting for it.
+- 2026-10-19: The charging station keeps rescue above the lease entirely. A kernel ranking by marginal terraforming value would rank a station low, because it produces nothing, and would be right about the production and catastrophically wrong about the consequence — a stranded rover is not a throttleable load. Top-ups are discretionary and do obey the lease.
+- 2026-10-19: control_room is excluded from the FAIL_SAFE probe. A card is a view with no setpoint to hold or release, so demanding one would ask it to declare something it cannot have. The probe flagged the first card written, which is it earning its keep rather than a false positive.
+- 2026-10-19: Built but deliberately NOT deployed while the principal sleeps: heater, pressure and charging station. Filling a marked slot restarts the machine on new code, and these are live life support on a long playthrough. A pressure generator in particular loses 10% per missed sweep, so an untested timing loop running unattended risks terraforming progress rather than merely behaving oddly. They sync when someone is watching.
+- 2026-10-19: The trace deduplicates an unchanged decision. The planner runs every few seconds, so one fabricator starved by a persistent shortage wrote the same row forever and pushed everything else out of a forty-row window. A row matching the last one for that subject now updates its hour instead, keeping both when the condition started and that it still holds, for one slot rather than forty.
+- 2026-10-19: ISC-13 is verified by an accident rather than a test. The planner died on the library signature bug, which left the machines genuinely unled, and both printed their fail-safe lines. A real failure is better evidence than a contrived one, and it only became readable because solar had stopped flooding the console.
+- 2026-10-19: ISC-12 remains open even though a line saying `oxygen: no fresh lease, holding` appeared, because the o2gen running in the save predates the tier guard: it was never re-marked for refill after that commit. The code that produced the evidence is not the code in the repo, and counting it would be the ring-buffer mistake in a new costume.
+- 2026-10-19: No writer helpers live in `lib/bus.py`. Each loop builds its own payload and publishes it through `publish(channel, value)`, whose two arguments cannot change. Readers stay shared because the publisher fixes their shape. This is a rule, not an omission.
+- 2026-10-19: `tools/resync_libs.py` is part of the deployment path, documented in bin/README.md. ct_sync mirroring lib files is necessary and not sufficient; the registration inside the save holds the source that executes, and it is chosen by writeSequence rather than filename because the ring buffers make mtime a liar.
+- 2026-10-19: The planner's currencies are re-aimed at the tier the base is actually at. Oxygen reads 41 and pressure 7.65 at 17 hours played; every generator is tier 1 but the two pressure units, and only Mk II pack tech is unlocked. Mk III, where water intake begins, gates at 625,000 Terraform Index. So the water contention the whole value model was built around does not exist in this save and will not for a long time, which is why `tonnes` read empty and four generators were traced starved every pass. Ingots are contended today — a pack for a tier rise later, or an Earth order for credits now — so that is what gets ranked.
+- 2026-10-19: A want activates by reading the machine's installed tier rather than by a hard-coded flag, so the water allocation switches itself on the day a Mk III pack is installed and says nothing until then. A dormant want means the machine is skipped, not ranked and starved: "this does not apply to you" and "you may have none of this" are different claims and only one of them was true.
+- 2026-10-19: Counted goods travel in the envelope's own `stock` field rather than sharing `tonnes` with rates. A count of ingots and a tonne per hour are different kinds of number, and the contended-goods list is named in both loops because the pipeline flows one way: a loop that measures must not have to ask the loop that decides what to measure.
+- 2026-10-19: Phase 3 rewrites the solar script purely to stop it talking. Fourteen panels printing a line per pass flushed the game's 500-entry console in seconds and destroyed the evidence from two live tests, including the fail-safe test that then proved nothing. A script that logs every pass makes every other script unobservable.
+- 2026-10-19: An allocation declares its own freshness horizon, as {ttl_s, machines}, computed by the planner from its cadence against the live clock. A constant in the reader was wrong by a factor of thirty-six and tracked no change in game speed.
+- 2026-10-19: ISC-12 cannot be verified on this base either. The tier guard makes a sub-Mk-III generator ignore its lease before the fail-safe branch is reached, so a tier-1 oxygen generator holding its setpoint proves nothing about the kernel being silent. Like ISC-11, it waits on a Mk III pack.
+- 2026-10-19: The six structural probes became one `tools/check-phase03.sh` with named subcommands rather than six near-identical scripts, and each was mutation-tested before being trusted: a violation injected, the check confirmed red, the tree restored. A probe that has never been red is not evidence, and all six were green on first run.
+- 2026-10-19: The lease path is proven end to end. With the kernel running, `o2gen_1` printed `fully supplied` and `smelter_1` printed `leased, running` — a machine's behaviour changed because of a broadcast allowance, which is the whole premise of the architecture. The autonomy fix also showed its work: 27.7 hours of storage against the deficit, so safety held where the previous build wanted to shed at 6.08 W.
+- 2026-10-19: An unmeasured fluid fails open. A fluid absent from the envelope means safety could not measure it, which the planner now distinguishes from a measured zero: it grants the full want and says so in the trace. Starving every machine that needs a fluid because the reading failed is the worse of the two mistakes, and a machine below the tier that consumes it ignores the grant anyway.
+- 2026-10-19: Safety never sheds a machine whose rated draw is zero. The first run rehearsed shedding two machines at `w: 0`, which frees nothing and buys only a dark machine; an idle machine reports no draw and a type never seen busy is absent from the wattage table, so this is the common case early rather than an edge.
+- 2026-10-19: Automation deployment is solved, and the fog entry asking about it is killed. An Automation created in game appears as `automation_N.py` in the same external-editor directory as every other script, so `ct_sync` reaches it exactly as it reaches a Control Room card — by slot id, through the slot map, with no new mechanism. ISC-48 already carries the claim.
+- 2026-10-19: Registered `capability`, `bus` and `trace` by writing `state.libraryScripts` in the save directly, with the game stopped and a backup taken, because the in-game Import as Game Library step is not something a script can reach. The schema was copied from an existing entry rather than invented: source three times over, a fresh `libraryIncarnationId` from the high-water counter, everything else at its idle default.
+- 2026-10-19: Safety ships with its breaker disarmed (`ENFORCE = False`), printing what it would shed rather than shedding. The first pass runs on an empty wattage table and reads the base from live draw alone, so on a base near capacity it could shed within seconds of starting, against the crude fallback order because no planner is ranking yet. A loop that can switch a base off earns a rehearsal.
+- 2026-10-19: Safety restores only machines recorded in its own shed ledger, persisted as `safety.shed`. Restoring every unpowered machine would have overridden the operator's own power-offs, which Principles forbids, and an unpersisted ledger would leave shed machines dark forever after a reload.
+- 2026-10-19: The wattage table is a high-water mark per machine type rather than a live reading. A grid member's consumed figure is documented as 0 W for a powered-off or idle machine, so the live reading cannot say what a machine would draw once it starts, which is the only figure headroom needs.
 - 2026-10-19: ISC-41 dropped as a duplicate of ISC-10; both asserted that no remote actuation call appears in phase03. Tombstoned rather than renumbered, per ID stability.
 - 2026-10-19: F7 and F8 re-homed. Archive hygiene (ISC-38, ISC-40) and the unattended-hour acceptance claim (ISC-43) were misfiled under biosphere and deployment; they are cross-cutting. ISC-45 to ISC-48 added so both features carry claims of their own subject.
 - 2026-10-19: Opportunity may preempt freight on an expiring deadline, against a standing drone reserve the planner holds back. Aftermath expires in 48 to 96 hours behind a 4-hour decode window, so a fully committed fleet would simply lose it.
 
 ## Learning
+
+- conjectured: syncing a library file into the save is enough to change what the game runs, since the docs say the game picks up later edits automatically.
+  refuted by: the planner dying on `publish_allocation() takes 2 positional arguments but 3 were given` while the file on disk had taken three for some time. The save stores each registered library's source and runs that copy.
+  learned: two rules. A loop may depend only on signatures that cannot change — `publish(channel, value)` — so each one builds its own payload and no writer helpers live in the library. And a library edit needs the registration rewritten, which `tools/resync_libs.py` now does. I had worked this out for the safety loop and left the planner calling a helper, which is the whole bug.
+  criterion now: ISC-48.
+
+- conjectured: the scarce things worth allocating are water, steam and watts, because that is where the documented multipliers are — 200x supplied against 5x starved.
+  refuted by: reading the save's actual progress instead of the manual. Oxygen 41, pressure 7.65, every generator tier 1, no Mk III tech. The multipliers are real and 600,000 Terraform Index away.
+  learned: a value model has to be aimed at the tier the base is at, not the tier the documentation is most interesting about. The machinery — pipeline, leases, fail-safes, trace, autonomy — was all sound; only the list of what counts as scarce was wrong, and I should have read the save before writing the list.
+  criterion now: the Goal, refined to name whatever is contended at the current tier.
+
+- conjectured: a 900-second staleness horizon on a lease was conservative, since the planner only runs every quarter of a world hour.
+  refuted by: the kernel-silent test. The automations were stopped and the machines ran on, and the lease was still only 253 seconds old after 41 planner cadences had passed. The fail-safe branch was never reached, so the test proved nothing.
+  learned: a world hour is about 25 simulation seconds, so a quarter-hour cadence comes round every six. 900 seconds is 145 missed passes, during which a dead planner holds the entire base on a ghost. Only the publisher knows its own cadence, and a reader converting world hours to simulation seconds is wrong by two orders of magnitude, so the horizon now travels inside the allocation.
+  criterion now: ISC-12, ISC-13 — both still open, because neither has yet been observed., so spare capacity is what the generators are making right now.
+  refuted by: the first run. Published `watts_free: 0` and a rehearsed shed needing 6.08 W, on a base that was running perfectly well on batteries with solar at zero.
+  learned: a brownout is generation PLUS storage failing to fund a tick, so the quantity that matters is how long storage covers the deficit, not whether generation covers the load. Measuring the wrong one declares every nightfall an emergency and sheds the base at dusk.
+  criterion now: ISC-17, refined from a generation test to an autonomy floor.
+
+- conjectured: a pump's output port reports the water it is supplying.
+  refuted by: `tonnes: {}` on every pass, and then the reference, which says a pass-through output such as a pump's reads 0 because nothing buffers there.
+  learned: supply cannot be measured at the pump. The well behind it carries a rated `flow_rate` by yield tier, which is a ceiling rather than a live reading — the right kind of error, since machines degrade gracefully when actual flow falls short.
+  criterion now: ISC-21.
+
+- conjectured: an unregistered file under `lib/` is importable anyway, since both machine scripts reported `running` with no error after the swap.
+  refuted by: the console history. `automation_1` died on `ModuleNotFoundError: No module named 'capability'` at its import line. The machine scripts' own failures had simply rotated out of a 500-entry console window before I looked.
+  learned: registration is required, and "no error in the snapshot" is not evidence of success when the evidence window is a ring buffer. Read the console history, not the status field.
+  criterion now: ISC-48.
+
+- conjectured: the decision trace could be one Archive key that every loop appends to, since forty rows is small and the loops run at different cadences.
+  refuted by: writing it. A shared key has two or more writers, which is exactly the contention the one-writer-per-prefix rule was adopted to avoid, and the Archive offers no lock worth building on.
+  learned: a shared log is shared mutable state wearing a different hat. Each loop owns its own trace key and the card merges on the world hour, the only clock all four share.
+  criterion now: ISC-36.
+
+- conjectured: the planner need only allocate to machines that consume a scarce fluid, since those are the ones in contention.
+  refuted by: writing the smelter. Its fail-safe is to idle, so a machine the planner never names idles forever. An allocation is permission, and silence reads as refusal.
+  learned: a fail-safe of idle obliges the planner to name that machine every pass. Discretionary machines get a run grant with no quantity, because their draw already sits inside the envelope safety measured.
+  criterion now: ISC-49.
 
 - conjectured: central control was impossible because hardware actions are self-only, so the controller could only advise.
   refuted by: `run_control` documented verbatim as "use it to build a supervisor", carrying `allowsRemoteWrites: True`, alongside `power_control.set_powered` and `.total()`.
@@ -252,8 +316,21 @@ Why: the kernel is worthless if it cannot reach the game, and the deployment pat
 
 <!-- One-line provenance stubs only; the proof lives in git and in the save. -->
 
+- ISC-1: `tools/check-syntax.sh scripts/phase03` green at a570daf.
+- ISC-2: `ct_sync phases --phase 3` reports 41 of 41 resolved, no ambiguity, at a570daf.
+- ISC-15: bus channel `env` carries watts_free, reserve_w, tonnes, autonomy_h, stored_wh at save wseq 2093.
+- ISC-16: bus channel `alloc.outpost_home` carries six machines keyed by id, one broadcast for the outpost, wseq 2093.
+- ISC-18: `safety.watts` learned temp_heater 2 then 6, oxygen_generator 8, pressure_generator 35 across two runs.
+- ISC-36: `safety.trace` and `plan.trace` are separate Archive keys, each bounded, wseq 2093.
+- ISC-49: `smelter_1` and `fabricator_2` appear in the allocation with a bare `run` grant, wseq 2093.
+- ISC-37: `scripts/phase03/control_room/kernel_card.py` draws envelope, allocation and merged trace; grep confirms no set_powered, set_enabled, run_control, buy or sell. Not yet deployed — it needs a panel slot.
+- ISC-13: console at save wseq 2166 — `smelter: no fresh lease, idle` during the window the planner was dead, then `leased, running` once it published again.
+- ISC-3, ISC-4, ISC-9, ISC-10, ISC-14, ISC-40: `tools/check-phase03.sh` all green, and each check verified red against an injected violation (6 of 6 caught) before being trusted. ISC-40's probe exempts `trace.py`, which writes a parameterised key its caller supplies.
+
 ## Remaining Work
 
 - [ ] Create one Automation in game and record how it appears on disk — blocks the kernel's deployment path and is currently fog.
 - [ ] Explicit slot mapping in `ct_sync` for cards and automations — delegated to its own session, since several `panel_N` slots currently collapse to one base name.
+- [ ] Deploy heater, pressure, charging station and the kernel card, with someone watching. The card also needs a panel slot created in game, and `kernel_card` will not name-match `panel_N` until the slot map from PR #1 lands.
+- [ ] ISC-11 cannot be verified on this base: every generator is tier 1, so no machine consumes water and the lease has nothing to throttle. It needs a Mk III pack installed before the claim means anything. Left as an open claim rather than a fog entry, because the question is precisely stated and the falsifier is nameable; only the hardware is missing.
 - [ ] Decide whether the Steam Condenser changes the water allocation problem enough to re-rank — gated behind 1,000,000 Plants, far outside this run.
